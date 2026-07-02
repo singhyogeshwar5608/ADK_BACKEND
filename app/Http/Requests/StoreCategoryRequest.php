@@ -19,6 +19,7 @@ class StoreCategoryRequest extends FormRequest
             'name' => ['required', 'string', 'min:2'],
             'slug' => ['nullable', 'string', Rule::unique('categories', 'slug')],
             'description' => ['nullable', 'string'],
+            'logo_url' => ['nullable', 'string', 'url'],
             'is_active' => ['boolean'],
         ];
     }

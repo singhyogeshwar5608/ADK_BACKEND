@@ -23,3 +23,24 @@
     RewriteCond %{REQUEST_FILENAME} !-f
     RewriteRule ^ index.php [L]
 </IfModule>
+
+# Optional Apache/LiteSpeed CORS echo (Laravel also sets CORS via EarlyCorsMiddleware + HandleCors).
+# Do NOT return bare OPTIONS 204 here — LiteSpeed can skip merging these headers with [R=204,L],
+# which causes "No Access-Control-Allow-Origin" on preflight.
+<IfModule mod_headers.c>
+    SetEnvIfNoCase Origin "^https?://(www\.)?offerlifetime\.com$" ACAO_ORIGIN=$0
+    SetEnvIfNoCase Origin "^http://localhost(:[0-9]+)?$" ACAO_ORIGIN=$0
+    SetEnvIfNoCase Origin "^https://localhost(:[0-9]+)?$" ACAO_ORIGIN=$0
+    SetEnvIfNoCase Origin "^http://127\.0\.0\.1(:[0-9]+)?$" ACAO_ORIGIN=$0
+    SetEnvIfNoCase Origin "^https://127\.0\.0\.1(:[0-9]+)?$" ACAO_ORIGIN=$0
+    SetEnvIfNoCase Origin "^http://192\.168\.[0-9]+\.[0-9]+(:[0-9]+)?$" ACAO_ORIGIN=$0
+    SetEnvIfNoCase Origin "^https://adkpro\.netlify\.app$" ACAO_ORIGIN=$0
+    SetEnvIfNoCase Origin "^https://aslidesikisan\.netlify\.app$" ACAO_ORIGIN=$0
+
+    Header always set Access-Control-Allow-Origin "%{ACAO_ORIGIN}e" env=ACAO_ORIGIN
+    Header always set Access-Control-Allow-Credentials "true" env=ACAO_ORIGIN
+    Header always set Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS, PATCH" env=ACAO_ORIGIN
+    Header always set Access-Control-Allow-Headers "Content-Type, Authorization, Accept, X-Requested-With, X-CSRF-TOKEN, X-XSRF-TOKEN" env=ACAO_ORIGIN
+    Header always set Access-Control-Max-Age "3600" env=ACAO_ORIGIN
+    Header always set Vary "Origin" env=ACAO_ORIGIN
+</IfModule>

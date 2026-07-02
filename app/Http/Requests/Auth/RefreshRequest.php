@@ -17,4 +17,13 @@ class RefreshRequest extends FormRequest
             'refresh_token' => ['required', 'string', 'min:10'],
         ];
     }
+
+    protected function prepareForValidation(): void
+    {
+        if ($this->has('refreshToken')) {
+            $this->merge([
+                'refresh_token' => $this->input('refreshToken'),
+            ]);
+        }
+    }
 }

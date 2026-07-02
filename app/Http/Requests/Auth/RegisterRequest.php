@@ -18,21 +18,29 @@ class RegisterRequest extends FormRequest
             'full_name' => ['required', 'string', 'min:2'],
             'email' => ['required', 'email', Rule::unique('members', 'email')],
             'password' => ['required', 'string', 'min:8'],
-            'phone' => ['nullable', 'string'],
+            'phone' => ['nullable', 'string', Rule::unique('members', 'phone')->whereNotNull('phone')],
+            'address' => ['nullable', 'string'],
             'role' => ['nullable', Rule::in(['ADMIN', 'MEMBER'])],
             'sponsor_id' => ['nullable', 'string'],
             'leg' => ['nullable', Rule::in(['LEFT', 'RIGHT'])],
             'profile_image' => ['nullable', 'url'],
+            'referral_code' => ['required', 'string', 'min:3', 'max:20'],
         ];
     }
 
     protected function prepareForValidation(): void
     {
-        $this->merge([
+        $merge = [
             'full_name' => $this->input('full_name', $this->input('fullName')),
             'email' => strtolower($this->input('email', $this->input('username', ''))),
             'sponsor_id' => $this->input('sponsor_id', $this->input('sponsorId')),
             'profile_image' => $this->input('profile_image', $this->input('profileImage')),
-        ]);
+        ];
+        $leg = $this->input('leg');
+        if (is_string($leg)) {
+            $merge['leg'] = strtoupper(trim($leg));
+        }
+
+        $this->merge($merge);
     }
 }

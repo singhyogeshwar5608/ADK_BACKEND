@@ -30,6 +30,9 @@ class UpdateProductRequest extends FormRequest
             'total_price' => ['sometimes', 'numeric', 'min:0'],
             'bv' => ['sometimes', 'numeric', 'min:0'],
             'stock' => ['sometimes', 'integer', 'min:0'],
+            'weight' => ['sometimes', 'numeric', 'min:0'],
+            'weight_unit' => ['sometimes', 'nullable', 'string', Rule::in(['g', 'kg', 'ml', 'l', 'pcs', 'pack', 'unit', 'box'])],
+            'shipping_charge' => ['sometimes', 'numeric', 'min:0'],
             'categories' => ['sometimes', 'array'],
             'categories.*' => ['string'],
             'images' => ['sometimes', 'array'],
@@ -38,6 +41,7 @@ class UpdateProductRequest extends FormRequest
             'rating' => ['sometimes', 'numeric', 'between:0,5'],
             'popularity_score' => ['sometimes', 'integer', 'min:0'],
             'is_active' => ['sometimes', 'boolean'],
+            'is_coming_soon' => ['sometimes', 'boolean'],
             'published_at' => ['sometimes', 'nullable', 'date'],
         ];
     }
@@ -52,7 +56,16 @@ class UpdateProductRequest extends FormRequest
             'total_price' => $this->input('total_price', $this->input('totalPrice')),
             'bv' => $this->input('bv', $this->input('bvValue')),
             'stock' => $this->input('stock', $this->input('inventory')),
+            'weight' => $this->input('weight'),
+            'shipping_charge' => $this->input('shipping_charge', $this->input('shippingCharge')),
+            'is_coming_soon' => $this->input('is_coming_soon', $this->input('isComingSoon')),
             'published_at' => $this->input('published_at', $this->input('publishedAt')),
         ]);
+
+        if ($this->has('weight_unit') || $this->has('weightUnit')) {
+            $this->merge([
+                'weight_unit' => $this->input('weight_unit', $this->input('weightUnit')),
+            ]);
+        }
     }
 }

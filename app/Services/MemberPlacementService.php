@@ -4,7 +4,6 @@ namespace App\Services;
 
 use App\Models\Member;
 use App\Support\Tree;
-use Illuminate\Support\Collection;
 use Illuminate\Validation\ValidationException;
 
 class MemberPlacementService
@@ -24,6 +23,7 @@ class MemberPlacementService
 
             return [
                 'sponsor' => null,
+                'referrer' => null,
                 'leg' => null,
                 'path' => Tree::rootPath(),
                 'depth' => 0,
@@ -48,6 +48,7 @@ class MemberPlacementService
         $placement = self::attemptPlacement($sponsor, $normalizedLeg, $excludeMemberId);
 
         if ($placement) {
+            $placement['referrer'] = $sponsor;
             return $placement;
         }
 
@@ -58,45 +59,48 @@ class MemberPlacementService
 
     protected static function attemptPlacement(Member $root, string $preferredLeg, ?int $excludeMemberId = null): ?array
     {
-        $queue = new \SplQueue();
-        $queue->enqueue($root);
-        $visited = collect([$root->id]);
+        $otherLeg = $preferredLeg === 'LEFT' ? 'RIGHT' : 'LEFT';
 
-        while (!$queue->isEmpty()) {
-            /** @var Member $current */
-            $current = $queue->dequeue();
+        // 1. Check if preferred leg slot is free at current node (by placement_path)
+        $preferredChildPath = Tree::childPath($root->placement_path, $preferredLeg);
+        $preferredChild = Member::query()
+            ->where('placement_path', $preferredChildPath)
+            ->when($excludeMemberId, fn ($query) => $query->where('id', '!=', $excludeMemberId))
+            ->first();
 
-            foreach (self::legOrder($preferredLeg) as $candidateLeg) {
-                $child = Member::query()
-                    ->where('sponsor_id', $current->id)
-                    ->where('leg', $candidateLeg)
-                    ->when($excludeMemberId, fn ($query) => $query->where('id', '!=', $excludeMemberId))
-                    ->first();
-
-                if (!$child) {
-                    return [
-                        'sponsor' => $current,
-                        'leg' => $candidateLeg,
-                        'path' => Tree::childPath($current->placement_path, $candidateLeg),
-                        'depth' => $current->depth + 1,
-                    ];
-                }
-
-                if (!$visited->contains($child->id)) {
-                    $queue->enqueue($child);
-                    $visited->push($child->id);
-                }
-            }
+        if (!$preferredChild) {
+            return [
+                'sponsor' => $root,
+                'leg' => $preferredLeg,
+                'path' => $preferredChildPath,
+                'depth' => $root->depth + 1,
+            ];
         }
 
-        return null;
-    }
+        // 2. Preferred leg is full → recursively traverse its entire subtree first
+        $result = self::attemptPlacement($preferredChild, $preferredLeg, $excludeMemberId);
+        if ($result !== null) {
+            return $result;
+        }
 
-    protected static function legOrder(string $preferred): array
-    {
-        return $preferred === 'LEFT'
-            ? ['LEFT', 'RIGHT']
-            : ['RIGHT', 'LEFT'];
+        // 3. Only now check the other leg slot at current node (by placement_path)
+        $otherChildPath = Tree::childPath($root->placement_path, $otherLeg);
+        $otherChild = Member::query()
+            ->where('placement_path', $otherChildPath)
+            ->when($excludeMemberId, fn ($query) => $query->where('id', '!=', $excludeMemberId))
+            ->first();
+
+        if (!$otherChild) {
+            return [
+                'sponsor' => $root,
+                'leg' => $otherLeg,
+                'path' => $otherChildPath,
+                'depth' => $root->depth + 1,
+            ];
+        }
+
+        // 4. Other leg is also full → recursively traverse its subtree
+        return self::attemptPlacement($otherChild, $preferredLeg, $excludeMemberId);
     }
 
     protected static function findSponsor(?string $identifier): ?Member

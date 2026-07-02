@@ -16,6 +16,7 @@ class LoginRequest extends FormRequest
         return [
             'email' => ['required', 'email'],
             'password' => ['required', 'string', 'min:6'],
+            'login_as_admin' => ['sometimes', 'boolean'],
         ];
     }
 

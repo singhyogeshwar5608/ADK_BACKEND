@@ -9,6 +9,7 @@ use App\Http\Requests\CataloguePage\StoreCataloguePageRequest;
 use App\Http\Requests\CataloguePage\UpdateCataloguePageRequest;
 use App\Http\Resources\CataloguePageResource;
 use App\Models\CataloguePage;
+use App\Services\CloudinaryUploader;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
@@ -50,7 +51,9 @@ class CataloguePageController extends Controller
     public function store(StoreCataloguePageRequest $request): JsonResponse
     {
         $data = $request->validated();
-        $data['image_path'] = $this->storeImage($request->file('image'));
+        $uploaded = $this->uploadImage($request->file('image'));
+        $data['image_path'] = $uploaded['url'];
+        $data['image_public_id'] = $uploaded['public_id'];
         $data['order_index'] = $this->nextOrderIndex();
 
         $page = CataloguePage::create($data);
@@ -65,10 +68,10 @@ class CataloguePageController extends Controller
         $data = $request->validated();
 
         if ($request->hasFile('image')) {
-            if ($catalogue->image_path && Storage::disk('public')->exists($catalogue->image_path)) {
-                Storage::disk('public')->delete($catalogue->image_path);
-            }
-            $data['image_path'] = $this->storeImage($request->file('image'));
+            $this->deleteImage($catalogue->image_public_id);
+            $uploaded = $this->uploadImage($request->file('image'));
+            $data['image_path'] = $uploaded['url'];
+            $data['image_public_id'] = $uploaded['public_id'];
         }
 
         $catalogue->update($data);
@@ -80,9 +83,7 @@ class CataloguePageController extends Controller
 
     public function destroy(CataloguePage $catalogue): JsonResponse
     {
-        if ($catalogue->image_path && Storage::disk('public')->exists($catalogue->image_path)) {
-            Storage::disk('public')->delete($catalogue->image_path);
-        }
+        $this->deleteImage($catalogue->image_public_id);
 
         $catalogue->delete();
 
@@ -106,9 +107,34 @@ class CataloguePageController extends Controller
         ]);
     }
 
-    private function storeImage(UploadedFile $file): string
+    /**
+     * Same storage strategy as product media ({@see MediaController::uploadProducts}): public disk, no Cloudinary.
+     */
+    private function uploadImage(UploadedFile $file): array
     {
-        return $file->store('catalogue', 'public');
+        $disk = Storage::disk('public');
+        $path = $file->store('catalogue', 'public');
+
+        return [
+            'url' => url($disk->url($path)),
+            'public_id' => $path,
+        ];
+    }
+
+    private function deleteImage(?string $publicId): void
+    {
+        if (!$publicId) {
+            return;
+        }
+
+        if (Storage::disk('public')->exists($publicId)) {
+            Storage::disk('public')->delete($publicId);
+
+            return;
+        }
+
+        // Legacy rows: Cloudinary public_id
+        app(CloudinaryUploader::class)->delete($publicId);
     }
 
     private function nextOrderIndex(): int

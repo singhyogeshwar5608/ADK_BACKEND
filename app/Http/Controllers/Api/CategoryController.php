@@ -66,4 +66,43 @@ class CategoryController extends Controller
 
         return response()->json(['category' => $category]);
     }
+
+    public function updateLogo(Request $request, Category $category): JsonResponse
+    {
+        $request->validate([
+            'logo_url' => ['required', 'string', 'url'],
+        ]);
+
+        $category->update([
+            'logo_url' => $request->logo_url,
+        ]);
+
+        return response()->json(['category' => $category]);
+    }
+
+    public function publicIndex(Request $request): JsonResponse
+    {
+        $limit = (int) $request->query('limit', 100);
+        $limit = max(1, min($limit, 100));
+
+        $query = Category::query()
+            ->where('is_active', true)
+            ->orderBy('name');
+
+        if ($search = $request->query('search')) {
+            $query->where(fn ($builder) => $builder
+                ->where('name', 'like', "%{$search}%")
+                ->orWhere('slug', 'like', "%{$search}%"));
+        }
+
+        $categories = $query->limit($limit)->get();
+
+        return response()->json([
+            'data' => $categories,
+            'meta' => [
+                'count' => $categories->count(),
+                'limit' => $limit,
+            ],
+        ]);
+    }
 }

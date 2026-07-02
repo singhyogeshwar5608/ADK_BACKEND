@@ -21,6 +21,7 @@ class UpdateCategoryRequest extends FormRequest
             'name' => ['sometimes', 'string', 'min:2'],
             'slug' => ['sometimes', 'string', Rule::unique('categories', 'slug')->ignore($categoryId)],
             'description' => ['sometimes', 'nullable', 'string'],
+            'logo_url' => ['sometimes', 'nullable', 'string', 'url'],
             'is_active' => ['sometimes', 'boolean'],
         ];
     }

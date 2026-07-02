@@ -11,9 +11,7 @@ class EventMediaResource extends JsonResource
      * Transform the resource into an array.
      */
     public function toArray($request): array
-  
     {
-    
         return [
             'id' => $this->id,
             'title' => $this->title,
@@ -37,6 +35,12 @@ class EventMediaResource extends JsonResource
     private function proxiedUrl(?string $value): ?string
     {
         if (empty($value)) {
+            return $value;
+        }
+
+        // If it's an external video link (YouTube, Facebook, etc.), return it as is
+        $lower = strtolower($value);
+        if (Str::contains($lower, ['youtube.com', 'youtu.be', 'facebook.com', 'fb.watch', 'vimeo.com', 'instagram.com'])) {
             return $value;
         }
 

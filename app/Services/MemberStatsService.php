@@ -20,11 +20,8 @@ class MemberStatsService
                 ->increment('stats_team_size');
         }
 
-        if ($member->sponsor_id) {
-            Member::query()
-                ->where('id', $member->sponsor_id)
-                ->increment('stats_direct_refs');
-        }
+        // NOTE: direct_referrals_count & stats_direct_refs are incremented
+        // on first purchase (in updateMemberActivity), not at registration time.
     }
 
     private function ancestorPaths(string $path): array

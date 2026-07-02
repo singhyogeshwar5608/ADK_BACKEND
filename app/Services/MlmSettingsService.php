@@ -30,6 +30,26 @@ class MlmSettingsService
         });
     }
 
+    public function getSetting(string $key, mixed $default = null): mixed
+    {
+        return Cache::remember("mlm_setting.{$key}", now()->addMinutes(5), function () use ($key, $default) {
+            $setting = MlmSetting::where('key', $key)->first();
+            
+            if (!$setting) {
+                return $default;
+            }
+
+            $value = $setting->value;
+            
+            // Handle different value types
+            if (is_array($value)) {
+                return data_get($value, 'value', $default);
+            }
+            
+            return $value ?? $default;
+        });
+    }
+
     public function refreshBinarySettingsCache(): void
     {
         Cache::forget(self::CACHE_KEY);

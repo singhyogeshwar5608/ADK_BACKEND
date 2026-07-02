@@ -38,7 +38,18 @@ class EventMediaController extends Controller
         }
 
         if (!empty($validated['media_type'])) {
-            $query->where('media_type', $validated['media_type']);
+            $mediaType = strtoupper($validated['media_type']);
+            if ($mediaType === 'VIDEO') {
+                $query->where(function($q) {
+                    $q->where('media_type', 'VIDEO')->orWhere('media_type', 'video');
+                });
+            } elseif ($mediaType === 'IMAGE') {
+                $query->where(function($q) {
+                    $q->where('media_type', 'IMAGE')->orWhere('media_type', 'image');
+                });
+            } else {
+                $query->where('media_type', $validated['media_type']);
+            }
         }
 
         if (array_key_exists('is_active', $validated)) {

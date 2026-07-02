@@ -13,6 +13,7 @@ class Category extends Model
         'name',
         'slug',
         'description',
+        'logo_url',
         'is_active',
     ];
 

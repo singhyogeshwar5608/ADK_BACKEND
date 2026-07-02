@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Str;
@@ -10,6 +11,11 @@ class Product extends Model
 {
     use HasFactory;
 
+    public function scopeActive(Builder $query): Builder
+    {
+        return $query->where('is_active', true);
+    }
+
     protected $fillable = [
         'sku',
         'name',
@@ -17,26 +23,37 @@ class Product extends Model
         'description',
         'actual_price',
         'total_price',
+        'discount_percentage',
         'bv',
         'stock',
+        'weight',
+        'weight_unit',
+        'shipping_charge',
+        'gst_percent',
         'categories',
         'images',
         'rating',
         'popularity_score',
         'is_active',
+        'is_coming_soon',
         'published_at',
     ];
 
     protected $casts = [
         'actual_price' => 'decimal:2',
         'total_price' => 'decimal:2',
+        'discount_percentage' => 'decimal:2',
         'bv' => 'decimal:2',
         'stock' => 'integer',
+        'weight' => 'decimal:2',
+        'shipping_charge' => 'decimal:2',
+        'gst_percent' => 'decimal:2',
         'categories' => 'array',
         'images' => 'array',
         'rating' => 'float',
         'popularity_score' => 'integer',
         'is_active' => 'boolean',
+        'is_coming_soon' => 'boolean',
         'published_at' => 'datetime',
     ];
 

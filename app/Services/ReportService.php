@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\IncomeTransaction;
 use App\Models\Member;
 use App\Models\Order;
 use Illuminate\Support\Carbon;
@@ -20,10 +21,14 @@ class ReportService
             Order::count(),
         ];
 
-        $todaysOrders = Order::whereDate('created_at', $today)->count();
+        $todaysOrders = Order::whereDate('created_at', $today)
+            ->whereNotNull('member_id')
+            ->count();
 
         $orderStats = Order::query()
             ->where('created_at', '>=', $rangeStart)
+            ->whereNotIn('status', ['CANCELLED'])
+            ->whereNotNull('member_id')
             ->selectRaw('COALESCE(SUM(total), 0) as total_sales')
             ->selectRaw('COALESCE(SUM(total_bv), 0) as total_bv')
             ->selectRaw('COUNT(*) as orders_count')
@@ -31,6 +36,8 @@ class ReportService
 
         $salesSeries = Order::query()
             ->where('created_at', '>=', $rangeStart)
+            ->whereNotIn('status', ['CANCELLED'])
+            ->whereNotNull('member_id')
             ->selectRaw('DATE(created_at) as label')
             ->selectRaw('COALESCE(SUM(total), 0) as sales')
             ->selectRaw('COALESCE(SUM(total_bv), 0) as bv')
@@ -61,14 +68,42 @@ class ReportService
                 ],
             ])->all();
 
+        // Actual income from income_transactions table (each type mapped exactly once)
+        $incomeTypes = [
+            'selfPurchaseIncome' => ['SELF'],
+            'sponsorIncome' => ['SPONSOR'],
+            'matchingIncome' => ['MATCHING'],
+            'selfRepurchase' => ['REPURCHASE_SELF'],
+            'repurchaseMatching' => ['REPURCHASE_MATCHING'],
+            'repurchaseAwards' => ['SPONSOR_AWARD'],
+            'tourRewards' => ['REWARD', 'REPURCHASE_REWARD'],
+            'royalty' => [],
+        ];
+
+        $incomeTotals = [];
+        foreach ($incomeTypes as $key => $types) {
+            if (!empty($types)) {
+                $incomeTotals[$key] = (float) IncomeTransaction::whereIn('type', $types)
+                    ->where('created_at', '>=', $rangeStart)
+                    ->sum('amount');
+            } else {
+                $incomeTotals[$key] = 0;
+            }
+        }
+
+        $incomeTotals['totalIncome'] = array_sum($incomeTotals);
+
         return [
             'totals' => [
                 'totalMembers' => $totalMembers,
                 'activeMembers' => $activeMembers,
+                'inactiveMembers' => max(0, $totalMembers - $activeMembers),
+                'pendingMembers' => Member::where('status', 'PENDING')->count(),
                 'totalOrders' => $totalOrders,
                 'todaysOrders' => $todaysOrders,
                 'totalSales' => (float) ($orderStats->total_sales ?? 0),
                 'totalBv' => (float) ($orderStats->total_bv ?? 0),
+                ...$incomeTotals,
             ],
             'topMembers' => $topMembers,
             'salesSeries' => $salesSeries,

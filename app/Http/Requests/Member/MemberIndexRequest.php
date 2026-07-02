@@ -10,7 +10,7 @@ class MemberIndexRequest extends FormRequest
     {
         return [
             'page' => ['sometimes', 'integer', 'min:1'],
-            'limit' => ['sometimes', 'integer', 'min:1', 'max:100'],
+            'limit' => ['sometimes', 'integer', 'min:1', 'max:1000'],
             'search' => ['nullable', 'string'],
             'status' => ['nullable', 'in:ACTIVE,SUSPENDED,PENDING'],
         ];
@@ -20,7 +20,7 @@ class MemberIndexRequest extends FormRequest
     {
         $this->merge([
             'page' => $this->input('page', 1),
-            'limit' => $this->input('limit', 10),
+            'limit' => $this->input('limit', 1000),
         ]);
 
         if ($this->filled('search')) {

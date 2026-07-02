@@ -24,10 +24,16 @@ class MediaProxyController extends Controller
             abort(404);
         }
 
-        return response()->file($absolutePath, array_merge([
-            'Content-Type' => File::mimeType($absolutePath) ?: 'application/octet-stream',
+        $mimeType = File::mimeType($absolutePath) ?: 'application/octet-stream';
+
+        return response()->file($absolutePath, [
+            'Content-Type' => $mimeType,
             'Cache-Control' => 'public, max-age=43200',
-        ], $this->corsHeaders($request)));
+            'Accept-Ranges' => 'bytes',
+            'Access-Control-Allow-Origin' => '*',
+            'Access-Control-Allow-Methods' => 'GET, OPTIONS',
+            'Access-Control-Allow-Headers' => 'Range, Content-Type, Authorization',
+        ]);
     }
 
     private function normalizePath(string $path): ?string

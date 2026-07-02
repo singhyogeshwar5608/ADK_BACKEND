@@ -44,7 +44,7 @@ class EventMediaIndexRequest extends FormRequest
             'sort' => ['nullable', 'in:recent,oldest,title_asc,title_desc,manual'],
             'status' => ['nullable', 'in:active,inactive'],
             'page' => ['nullable', 'integer', 'min:1'],
-            'limit' => ['nullable', 'integer', 'min:1', 'max:50'],
+            'limit' => ['nullable', 'integer', 'min:1', 'max:500'],
         ];
     }
 

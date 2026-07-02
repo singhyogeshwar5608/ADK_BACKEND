@@ -52,7 +52,20 @@ return [
     |
     */
 
-    'url' => env('APP_URL', 'http://localhost'),
+    'url' => env('APP_URL', 'http://localhost:8000'),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Public signup page (referral links: ?ref= & optional &leg=)
+    |--------------------------------------------------------------------------
+    | Must match the Flutter web `REFERRAL_SIGNUP_BASE_URL` in assets/dotenv.
+    */
+    'signup_url' => env(
+        'APP_SIGNUP_URL',
+        'https://master.d1yeg5lmbstgw1.amplifyapp.com/members/signup'
+    ),
+
+    'force_root_url_from_request' => (bool) env('FORCE_ROOT_URL_FROM_REQUEST', false),
 
     /*
     |--------------------------------------------------------------------------

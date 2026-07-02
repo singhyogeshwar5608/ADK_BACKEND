@@ -6,6 +6,7 @@ use App\Events\ProductBroadcastEvent;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\StoreProductRequest;
 use App\Http\Requests\UpdateProductRequest;
+use App\Http\Resources\ProductResource;
 use App\Models\Product;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -20,7 +21,12 @@ class ProductController extends Controller
 
     public function publicIndex(Request $request): JsonResponse
     {
-        $query = Product::query()->where('is_active', true)->orderByDesc('created_at');
+        $query = Product::query()->active()->orderByDesc('created_at');
+
+        if ($ids = $request->query('ids')) {
+            $idList = explode(',', $ids);
+            $query->whereIn('id', $idList);
+        }
 
         return $this->buildProductResponse($request, $query, enforceActive: true);
     }
@@ -30,12 +36,12 @@ class ProductController extends Controller
         $product = Product::create($request->validated());
         event(new ProductBroadcastEvent($product->fresh()->toArray(), 'created'));
 
-        return response()->json(['product' => $product], 201);
+        return response()->json(['product' => ProductResource::make($product)], 201);
     }
 
     public function show(Product $product): JsonResponse
     {
-        return response()->json(['product' => $product]);
+        return response()->json(['product' => ProductResource::make($product)]);
     }
 
     public function update(UpdateProductRequest $request, Product $product): JsonResponse
@@ -43,7 +49,7 @@ class ProductController extends Controller
         $product->update($request->validated());
         event(new ProductBroadcastEvent($product->fresh()->toArray(), 'updated'));
 
-        return response()->json(['product' => $product]);
+        return response()->json(['product' => ProductResource::make($product)]);
     }
 
     public function destroy(Product $product): JsonResponse
@@ -104,7 +110,7 @@ class ProductController extends Controller
         $paginator = $query->paginate($limit, ['*'], 'page', $page);
 
         return response()->json([
-            'data' => $paginator->items(),
+            'data' => ProductResource::collection($paginator->items()),
             'meta' => [
                 'page' => $paginator->currentPage(),
                 'limit' => $paginator->perPage(),

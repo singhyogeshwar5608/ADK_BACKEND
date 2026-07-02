@@ -8,7 +8,7 @@ class ReorderCataloguePageRequest extends FormRequest
 {
     public function authorize(): bool
     {
-        return $this->user()?->role === 'ADMIN';
+        return (bool) $this->user()?->canAccessStaffPanelModules();
     }
 
     public function rules(): array

@@ -3,6 +3,7 @@
 namespace App\Http\Requests\Member;
 
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Rule;
 
 class MemberUpdateRequest extends FormRequest
 {
@@ -55,6 +56,7 @@ class MemberUpdateRequest extends FormRequest
             'email' => ['sometimes', 'email'],
             'phone' => ['sometimes', 'string'],
             'status' => ['sometimes', 'in:ACTIVE,SUSPENDED,PENDING'],
+            'type' => ['sometimes', 'in:LEADER,USER'],
             'leg' => ['sometimes', 'in:LEFT,RIGHT'],
             'profile_image' => ['sometimes', 'nullable', 'url'],
         ];

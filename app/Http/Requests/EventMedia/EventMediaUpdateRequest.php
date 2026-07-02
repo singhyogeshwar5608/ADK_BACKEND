@@ -8,7 +8,7 @@ class EventMediaUpdateRequest extends FormRequest
 {
     public function authorize(): bool
     {
-        return $this->user()?->role === 'ADMIN';
+        return (bool) $this->user()?->canAccessStaffPanelModules();
     }
 
     protected function prepareForValidation(): void

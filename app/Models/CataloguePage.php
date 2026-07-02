@@ -12,6 +12,7 @@ class CataloguePage extends Model
     protected $fillable = [
         'title',
         'image_path',
+        'image_public_id',
         'order_index',
         'is_active',
         'published_at',
