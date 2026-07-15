@@ -33,6 +33,7 @@ class UpdateProductRequest extends FormRequest
             'weight' => ['sometimes', 'numeric', 'min:0'],
             'weight_unit' => ['sometimes', 'nullable', 'string', Rule::in(['g', 'kg', 'ml', 'l', 'pcs', 'pack', 'unit', 'box'])],
             'shipping_charge' => ['sometimes', 'numeric', 'min:0'],
+            'hsn_code' => ['sometimes', 'nullable', 'string', 'max:20'],
             'categories' => ['sometimes', 'array'],
             'categories.*' => ['string'],
             'images' => ['sometimes', 'array'],

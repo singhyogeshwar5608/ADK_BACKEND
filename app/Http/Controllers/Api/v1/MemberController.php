@@ -65,7 +65,7 @@ class MemberController extends Controller
             });
         }
 
-        $query->orderByRaw("FIELD(role, 'ADMIN') DESC")->orderByDesc('created_at')->with('sponsor:id,member_id');
+        $query->orderByRaw("FIELD(role, 'ADMIN') DESC")->orderBy('serial_no')->with('sponsor:id,member_id');
 
         $limit = (int) $request->input('limit', 10);
         $page = (int) $request->input('page', 1);
@@ -224,7 +224,33 @@ class MemberController extends Controller
             'profile_image' => array_key_exists('profile_image', $data)
                 ? $data['profile_image']
                 : $member->profile_image,
+            // KYC fields
+            'bank_account_number' => array_key_exists('bank_account_number', $data)
+                ? $data['bank_account_number'] : $member->bank_account_number,
+            'bank_account_image' => array_key_exists('bank_account_image', $data)
+                ? $data['bank_account_image'] : $member->bank_account_image,
+            'pan_number' => array_key_exists('pan_number', $data)
+                ? $data['pan_number'] : $member->pan_number,
+            'pan_image' => array_key_exists('pan_image', $data)
+                ? $data['pan_image'] : $member->pan_image,
+            'aadhar_number' => array_key_exists('aadhar_number', $data)
+                ? $data['aadhar_number'] : $member->aadhar_number,
+            'aadhar_image' => array_key_exists('aadhar_image', $data)
+                ? $data['aadhar_image'] : $member->aadhar_image,
+            // Nominee fields
+            'nominee_name' => array_key_exists('nominee_name', $data)
+                ? $data['nominee_name'] : $member->nominee_name,
+            'nominee_aadhar_number' => array_key_exists('nominee_aadhar_number', $data)
+                ? $data['nominee_aadhar_number'] : $member->nominee_aadhar_number,
+            'nominee_aadhar_image' => array_key_exists('nominee_aadhar_image', $data)
+                ? $data['nominee_aadhar_image'] : $member->nominee_aadhar_image,
         ])->save();
+
+        // Update QR code image separately (not in fillable)
+        if (array_key_exists('qr_code_image', $data)) {
+            $member->qr_code_image = $data['qr_code_image'];
+            $member->save();
+        }
 
         // If member was just activated and already has a first purchase,
         // ensure the sponsor's direct referral counts include this member

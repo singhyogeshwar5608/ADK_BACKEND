@@ -264,7 +264,7 @@ class ShiprocketService
                     'selling_price' => (float) ($item['price'] ?? 0),
                     'discount' => 0.0,
                     'tax' => 0.0,
-                    'hsn' => 0,
+                    'hsn' => $item['hsn_code'] ?? 0,
                 ];
             }
         }

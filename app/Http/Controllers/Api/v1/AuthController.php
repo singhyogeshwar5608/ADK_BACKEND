@@ -163,6 +163,12 @@ class AuthController extends Controller
             ]);
         }
 
+        if (!$wantsAdmin && $member->role === 'ADMIN') {
+            throw ValidationException::withMessages([
+                'email' => 'Please enable the admin login option to sign in as an administrator.',
+            ]);
+        }
+
         $tokens = $this->issueTokens($member);
 
         return response()->json(array_merge(['member' => $member], $tokens));
@@ -233,6 +239,10 @@ class AuthController extends Controller
         $repurchaseMatchingIncome = (float) ($member->incomeTransactions()
             ->where('type', 'REPURCHASE_MATCHING')
             ->sum('amount') ?? 0);
+
+        $tdsIncome = (float) ($member->incomeTransactions()
+            ->where('type', 'TDS_INCOME')
+            ->sum('amount') ?? 0);
         
         $response = [
             'member' => [
@@ -250,6 +260,8 @@ class AuthController extends Controller
                     'sponsorIncome' => $sponsorIncome,
                     'sponsorAwardKitRepurchaseIncome' => $sponsorAwardKitRepurchaseIncome,
                     'repurchaseMatchingIncome' => $repurchaseMatchingIncome,
+                    'downlineMonthlySponsor' => $member->downline_monthly_sponsor_income,
+                    'tdsIncome' => $tdsIncome,
                 ],
                 'matchingPairs' => [
                     'leftLeg' => $member->bv_left_leg,
@@ -333,6 +345,7 @@ class AuthController extends Controller
             'email' => 'sometimes|string|email|max:255|unique:members,email,' . $member->id,
             'phone' => 'sometimes|string|max:20',
             'address' => 'sometimes|string|max:255',
+            'landmark' => 'sometimes|string|max:255',
             'city' => 'sometimes|string|max:100',
             'state' => 'sometimes|string|max:100',
             'profileImage' => 'sometimes|string|max:500',
@@ -344,6 +357,7 @@ class AuthController extends Controller
             'email' => $data['email'] ?? $member->email,
             'phone' => $data['phone'] ?? $member->phone,
             'address' => $data['address'] ?? $member->address,
+            'landmark' => $data['landmark'] ?? $member->landmark,
             'city' => $data['city'] ?? $member->city,
             'state' => $data['state'] ?? $member->state,
             'profile_image' => $data['profileImage'] ?? $member->profile_image,

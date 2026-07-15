@@ -21,6 +21,8 @@ class KycController extends Controller
             'bankAccountNumber' => 'nullable|string|max:50',
             'aadharNumber' => 'nullable|string|max:20',
             'panNumber' => 'nullable|string|max:20',
+            'nomineeName' => 'nullable|string|max:255',
+            'nomineeAadharNumber' => 'nullable|string|max:20',
         ]);
 
         if ($validator->fails()) {
@@ -29,6 +31,53 @@ class KycController extends Controller
                 'message' => 'Validation failed',
                 'errors' => $validator->errors()
             ], 422);
+        }
+
+        // Check if KYC documents are already complete - member cannot change them
+        if ($request->has('bankAccountNumber') && $this->isBankKycComplete($member)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Bank account details cannot be changed. Please contact admin for changes.',
+            ], 403);
+        }
+        if ($request->has('bankAccountImage') && $this->isBankKycComplete($member)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Bank account image cannot be changed. Please contact admin for changes.',
+            ], 403);
+        }
+        if ($request->has('aadharNumber') && $this->isAadharKycComplete($member)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Aadhar details cannot be changed. Please contact admin for changes.',
+            ], 403);
+        }
+        if ($request->has('aadharImage') && $this->isAadharKycComplete($member)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Aadhar image cannot be changed. Please contact admin for changes.',
+            ], 403);
+        }
+        if ($request->has('panNumber') && $this->isPanKycComplete($member)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'PAN details cannot be changed. Please contact admin for changes.',
+            ], 403);
+        }
+        if ($request->has('panImage') && $this->isPanKycComplete($member)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'PAN image cannot be changed. Please contact admin for changes.',
+            ], 403);
+        }
+
+        // Check if nominee is already complete - member cannot change it
+        $hasNomineeChanges = $request->has('nomineeName') || $request->has('nomineeAadharNumber') || $request->has('nomineeAadharImage');
+        if ($hasNomineeChanges && $this->isNomineeComplete($member)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Nominee details cannot be changed. Please contact admin for changes.',
+            ], 403);
         }
 
         try {
@@ -49,10 +98,21 @@ class KycController extends Controller
                 $member->pan_number = $request->panNumber;
             }
 
+            // Update nominee fields
+            if ($request->has('nomineeName')) {
+                \Log::info('Updating nominee name: ' . $request->nomineeName);
+                $member->nominee_name = $request->nomineeName;
+            }
+            if ($request->has('nomineeAadharNumber')) {
+                \Log::info('Updating nominee aadhar number: ' . $request->nomineeAadharNumber);
+                $member->nominee_aadhar_number = $request->nomineeAadharNumber;
+            }
+
             // Handle image URLs from Cloudinary
             $this->handleImageUrl($request, $member, 'bankAccountImage', 'bank_account_image');
             $this->handleImageUrl($request, $member, 'aadharImage', 'aadhar_image');
             $this->handleImageUrl($request, $member, 'panImage', 'pan_image');
+            $this->handleImageUrl($request, $member, 'nomineeAadharImage', 'nominee_aadhar_image');
 
             // Update KYC status if all documents are uploaded
             if ($this->isKycComplete($member)) {
@@ -79,6 +139,11 @@ class KycController extends Controller
                         'panCard' => [
                             'number' => $member->pan_number,
                             'image' => $member->pan_image,
+                        ],
+                        'nominee' => [
+                            'name' => $member->nominee_name,
+                            'aadharNumber' => $member->nominee_aadhar_number,
+                            'aadharImage' => $member->nominee_aadhar_image,
                         ],
                         'status' => $member->kyc_status,
                     ]
@@ -134,6 +199,101 @@ class KycController extends Controller
     }
 
     /**
+     * Check if bank KYC is complete (number + image filled)
+     */
+    private function isBankKycComplete(Member $member): bool
+    {
+        return !empty($member->bank_account_number) && 
+               !empty($member->bank_account_image);
+    }
+
+    /**
+     * Check if aadhar KYC is complete (number + image filled)
+     */
+    private function isAadharKycComplete(Member $member): bool
+    {
+        return !empty($member->aadhar_number) && 
+               !empty($member->aadhar_image);
+    }
+
+    /**
+     * Check if pan KYC is complete (number + image filled)
+     */
+    private function isPanKycComplete(Member $member): bool
+    {
+        return !empty($member->pan_number) && 
+               !empty($member->pan_image);
+    }
+
+    /**
+     * Check if nominee is complete (all three fields filled)
+     */
+    private function isNomineeComplete(Member $member): bool
+    {
+        return !empty($member->nominee_name) && 
+               !empty($member->nominee_aadhar_number) && 
+               !empty($member->nominee_aadhar_image);
+    }
+
+    /**
+     * Admin: Update nominee details for any member
+     */
+    public function adminUpdateNominee(Request $request, int $memberId)
+    {
+        $admin = $request->user();
+        if ($admin->role !== 'ADMIN') {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized. Only admins can perform this action.',
+            ], 403);
+        }
+
+        $member = Member::findOrFail($memberId);
+
+        $validator = Validator::make($request->all(), [
+            'nomineeName' => 'nullable|string|max:255',
+            'nomineeAadharNumber' => 'nullable|string|max:20',
+            'nomineeAadharImage' => 'nullable|string|max:2048',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation failed',
+                'errors' => $validator->errors()
+            ], 422);
+        }
+
+        try {
+            if ($request->has('nomineeName')) {
+                $member->nominee_name = $request->nomineeName;
+            }
+            if ($request->has('nomineeAadharNumber')) {
+                $member->nominee_aadhar_number = $request->nomineeAadharNumber;
+            }
+            if ($request->has('nomineeAadharImage')) {
+                $member->nominee_aadhar_image = $request->nomineeAadharImage;
+            }
+
+            $member->save();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Nominee details updated successfully',
+                'data' => [
+                    'member' => $member,
+                ]
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to update nominee details',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
      * Get KYC status for the authenticated member
      */
     public function status(Request $request)
@@ -155,6 +315,11 @@ class KycController extends Controller
                     'panCard' => [
                         'number' => $member->pan_number,
                         'image' => $this->publicKycImageUrl($member->pan_image),
+                    ],
+                    'nominee' => [
+                        'name' => $member->nominee_name,
+                        'aadharNumber' => $member->nominee_aadhar_number,
+                        'aadharImage' => $this->publicKycImageUrl($member->nominee_aadhar_image),
                     ],
                     'status' => $member->kyc_status,
                     'rejectionReason' => $member->kyc_rejection_reason,

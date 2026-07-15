@@ -23,6 +23,7 @@ class ProductResource extends JsonResource
             'weightUnit' => $this->weight_unit ?? 'g',
             'shippingCharge' => (float) ($this->shipping_charge ?? 0),
             'gstPercent' => (float) ($this->gst_percent ?? 0),
+            'hsnCode' => $this->hsn_code ?? null,
             'rating' => (float) ($this->rating ?? 0),
             'popularityScore' => (int) ($this->popularity_score ?? 0),
             'isActive' => (bool) $this->is_active,

@@ -24,6 +24,7 @@ class Member extends Authenticatable
         'email',
         'phone',
         'address',
+        'landmark',
         'city',
         'state',
         'profile_image',
@@ -62,9 +63,14 @@ class Member extends Authenticatable
         'kyc_status',
         'kyc_rejection_reason',
         'kyc_verified_at',
+        // Nominee Fields
+        'nominee_name',
+        'nominee_aadhar_number',
+        'nominee_aadhar_image',
         'serial_no',
         'type',
         'referred_by',
+        'tds_income',
     ];
 
     protected static function booted()
@@ -101,6 +107,7 @@ class Member extends Authenticatable
         'first_match_done' => 'boolean',
         'reward_eligible' => 'boolean',
         'level_completion' => 'integer',
+        'tds_income' => 'decimal:2',
         // KYC Document Fields
         'kyc_status' => 'string',
         'kyc_verified_at' => 'datetime',
@@ -126,6 +133,15 @@ class Member extends Authenticatable
         }
         if (isset($array['qr_code_url'])) {
             $array['qrCodeUrl'] = $array['qr_code_url'];
+        }
+        if (isset($array['nominee_name'])) {
+            $array['nomineeName'] = $array['nominee_name'];
+        }
+        if (isset($array['nominee_aadhar_number'])) {
+            $array['nomineeAadharNumber'] = $array['nominee_aadhar_number'];
+        }
+        if (isset($array['nominee_aadhar_image'])) {
+            $array['nomineeAadharImage'] = $array['nominee_aadhar_image'];
         }
         return $array;
     }
@@ -255,5 +271,22 @@ class Member extends Authenticatable
         return Member::where('placement_path', 'like', $this->placement_path . '.%')
             ->where('id', '!=', $this->id)
             ->sum('bv_total') ?? 0;
+    }
+
+    public function getDownlineMonthlySponsorIncomeAttribute(): float
+    {
+        // Actual TIER_INCOME credited to this member from their direct downlines this month
+        $directChildIds = Member::where('sponsor_id', $this->id)->pluck('id');
+
+        if ($directChildIds->isEmpty()) {
+            return 0.0;
+        }
+
+        return (float) IncomeTransaction::where('member_id', $this->id)
+            ->where('type', 'TIER_INCOME')
+            ->whereIn('from_member_id', $directChildIds)
+            ->whereMonth('created_at', now()->month)
+            ->whereYear('created_at', now()->year)
+            ->sum('amount');
     }
 }

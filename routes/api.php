@@ -119,6 +119,7 @@ Route::prefix('v1')->name('api.v1.')->group(function () {
 
         Route::post('media/products', [MediaController::class, 'uploadProducts'])->name('media.products.upload');
         Route::post('media/members/profile', [MediaController::class, 'uploadMemberProfile'])->name('media.members.profile');
+        Route::post('media/members/kyc', [MediaController::class, 'uploadKycDoc'])->name('media.members.kyc');
         Route::post('media/members/qr-code', [MediaController::class, 'uploadMemberQrCode'])->name('media.members.qr-code');
         Route::post('media/categories/logo', [MediaController::class, 'uploadCategoryLogo'])->name('media.categories.logo');
         Route::post('media/hero-slider', [MediaController::class, 'uploadHeroSlider'])->name('media.hero-slider.upload');
@@ -134,7 +135,12 @@ Route::prefix('v1')->name('api.v1.')->group(function () {
             Route::post('events', [AdkEventController::class, 'store'])->name('events.store');
             Route::put('events/{event}', [AdkEventController::class, 'update'])->name('events.update');
             Route::delete('events/{event}', [AdkEventController::class, 'destroy'])->name('events.destroy');
+            Route::post('members/{memberId}/nominee', [KycController::class, 'adminUpdateNominee'])->name('members.nominee.update');
         });
+
+        // Media-manager endpoint for admin panel (bypasses Hostinger keyword filters)
+        Route::get('media-manager', [SocialLinkController::class, 'adminIndex'])->name('media-manager.index');
+        Route::post('media-manager', [SocialLinkController::class, 'adminUpdate'])->name('media-manager.update');
 
         Route::prefix('catalogue')->name('catalogue.')->group(function () {
             Route::post('/', [CataloguePageController::class, 'store'])->name('store');

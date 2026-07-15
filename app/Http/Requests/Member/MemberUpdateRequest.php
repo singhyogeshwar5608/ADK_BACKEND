@@ -44,6 +44,40 @@ class MemberUpdateRequest extends FormRequest
             $payload['profile_image'] = $this->input('profileImage');
         }
 
+        // KYC fields
+        if ($this->has('bankAccountNumber')) {
+            $payload['bank_account_number'] = $this->input('bankAccountNumber');
+        }
+        if ($this->has('bankAccountImage')) {
+            $payload['bank_account_image'] = $this->input('bankAccountImage');
+        }
+        if ($this->has('panNumber')) {
+            $payload['pan_number'] = $this->input('panNumber');
+        }
+        if ($this->has('panImage')) {
+            $payload['pan_image'] = $this->input('panImage');
+        }
+        if ($this->has('aadharNumber')) {
+            $payload['aadhar_number'] = $this->input('aadharNumber');
+        }
+        if ($this->has('aadharImage')) {
+            $payload['aadhar_image'] = $this->input('aadharImage');
+        }
+        if ($this->has('qrCodeImage')) {
+            $payload['qr_code_image'] = $this->input('qrCodeImage');
+        }
+
+        // Nominee fields
+        if ($this->has('nomineeName')) {
+            $payload['nominee_name'] = $this->input('nomineeName');
+        }
+        if ($this->has('nomineeAadharNumber')) {
+            $payload['nominee_aadhar_number'] = $this->input('nomineeAadharNumber');
+        }
+        if ($this->has('nomineeAadharImage')) {
+            $payload['nominee_aadhar_image'] = $this->input('nomineeAadharImage');
+        }
+
         if (! empty($payload)) {
             $this->merge($payload);
         }
@@ -59,6 +93,18 @@ class MemberUpdateRequest extends FormRequest
             'type' => ['sometimes', 'in:LEADER,USER'],
             'leg' => ['sometimes', 'in:LEFT,RIGHT'],
             'profile_image' => ['sometimes', 'nullable', 'url'],
+            // KYC fields
+            'bank_account_number' => ['sometimes', 'nullable', 'string', 'max:50'],
+            'bank_account_image' => ['sometimes', 'nullable', 'string', 'max:2048'],
+            'pan_number' => ['sometimes', 'nullable', 'string', 'max:20'],
+            'pan_image' => ['sometimes', 'nullable', 'string', 'max:2048'],
+            'aadhar_number' => ['sometimes', 'nullable', 'string', 'max:20'],
+            'aadhar_image' => ['sometimes', 'nullable', 'string', 'max:2048'],
+            'qr_code_image' => ['sometimes', 'nullable', 'string', 'max:2048'],
+            // Nominee fields
+            'nominee_name' => ['sometimes', 'nullable', 'string', 'max:255'],
+            'nominee_aadhar_number' => ['sometimes', 'nullable', 'string', 'max:20'],
+            'nominee_aadhar_image' => ['sometimes', 'nullable', 'string', 'max:2048'],
         ];
     }
 }

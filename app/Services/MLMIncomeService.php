@@ -367,6 +367,9 @@ class MLMIncomeService
 
     /**
      * Credit wallet and create transaction records
+     * Applies 5% tier deduction on ALL income types, crediting the sponsor recursively.
+     * Applies 10% admin TDS deduction on ALL income types (except TDS_INCOME itself),
+     * crediting the admin member.
      */
     private function creditWallet(
         Member $member,
@@ -378,6 +381,52 @@ class MLMIncomeService
         ?int $fromMemberId,
         array $meta = []
     ): void {
+        // Save original amount before any deductions
+        $originalAmount = $amount;
+
+        // --- 5% Tier Deduction: deduct from ALL income, credit to sponsor (cascading) ---
+        $tierAmount = 0.0;
+        $tierSponsor = null;
+
+        if ($amount > 0) {
+            $tierAmount = round($amount * 0.05, 2);
+            if ($tierAmount > 0) {
+                if ($member->referred_by) {
+                    $tierSponsor = Member::where('member_id', $member->referred_by)->lockForUpdate()->first();
+                }
+                if (!$tierSponsor && $member->sponsor_id) {
+                    $tierSponsor = Member::lockForUpdate()->find($member->sponsor_id);
+                }
+                if ($tierSponsor) {
+                    $amount = round($amount - $tierAmount, 2);
+                } else {
+                    $tierAmount = 0.0;
+                }
+            }
+        }
+        // ---------------------------------------------------------------------------
+
+        // --- 10% Admin TDS Deduction: deduct from ALL income (except TDS_INCOME), credit to admin ---
+        $adminTdsAmount = 0.0;
+        $admin = null;
+
+        if ($type !== 'TDS_INCOME' && $amount > 0) {
+            // Calculate TDS on the original income amount (before any deductions)
+            $originalForTds = $amount + $tierAmount;
+            $adminTdsAmount = round($originalForTds * 0.10, 2);
+            if ($adminTdsAmount > 0) {
+                $admin = Member::where('role', 'ADMIN')->lockForUpdate()->first();
+                // Skip TDS if recipient is the admin themselves
+                if ($admin && $admin->id !== $member->id) {
+                    $amount = round($amount - $adminTdsAmount, 2);
+                } else {
+                    $adminTdsAmount = 0.0;
+                    $admin = null;
+                }
+            }
+        }
+        // ---------------------------------------------------------------------------
+
         // Update member wallet
         $member->wallet_balance += $amount;
         $member->wallet_total_earned += $amount;
@@ -385,6 +434,15 @@ class MLMIncomeService
         $member->save();
         
         // Create income transaction
+        $mergedMeta = $meta;
+        if ($tierAmount > 0 && $tierSponsor) {
+            $mergedMeta['tier_deducted'] = $tierAmount;
+            $mergedMeta['tier_sponsor_id'] = $tierSponsor->id;
+        }
+        if ($adminTdsAmount > 0 && $admin) {
+            $mergedMeta['admin_tds_deducted'] = $adminTdsAmount;
+            $mergedMeta['admin_tds_admin_id'] = $admin->id;
+        }
         try {
             IncomeTransaction::create([
                 'member_id' => $member->id,
@@ -395,7 +453,7 @@ class MLMIncomeService
                 'source_id' => $sourceId,
                 'from_member_id' => $fromMemberId,
                 'description' => $this->getIncomeDescription($type, $meta),
-                'meta' => $meta,
+                'meta' => $mergedMeta,
                 'is_capped' => $meta['capped'] ?? false,
             ]);
         } catch (\Throwable $e) {
@@ -415,7 +473,107 @@ class MLMIncomeService
             'balance_after' => $member->wallet_balance,
             'reference' => strtoupper(substr($type, 0, 3)) . '-' . now()->timestamp . '-' . $member->id,
             'context' => $type . '_INCOME',
-            'meta' => $meta,
+            'meta' => $mergedMeta,
+        ]);
+
+        // --- Credit 5% tier income to the sponsor (recursive — own 5% deducted too) ---
+        if ($tierSponsor && $tierAmount > 0) {
+            $originalAmount = $amount + $tierAmount + ($adminTdsAmount > 0 ? $adminTdsAmount : 0);
+            // Apply sponsor's weekly cap, then recurse
+            $this->resetWeeklyIncomeIfNeeded($tierSponsor);
+            $remainingCap = $this->weeklyCap - (float) $tierSponsor->weekly_income;
+            $cappedTier = $remainingCap > 0 ? min($tierAmount, $remainingCap) : 0.0;
+
+            if ($cappedTier > 0) {
+                $this->creditWallet(
+                    $tierSponsor,
+                    $cappedTier,
+                    'TIER_INCOME',
+                    0,
+                    $sourceType,
+                    $sourceId,
+                    $member->id,
+                    [
+                        'source_member_id' => $member->id,
+                        'source_income_type' => $type,
+                        'source_income_amount' => $originalAmount,
+                        'tier_percentage' => 5,
+                        'original_amount' => $tierAmount,
+                        'capped' => $cappedTier < $tierAmount,
+                    ]
+                );
+            }
+        }
+        // ---------------------------------------------
+
+        // --- Credit 10% admin TDS income to the admin (no further deductions) ---
+        if ($adminTdsAmount > 0 && $admin) {
+            $this->creditAdminTdsIncome(
+                $admin,
+                $adminTdsAmount,
+                $type,
+                $sourceType,
+                $sourceId,
+                $member->id,
+                $originalAmount,
+                $meta,
+            );
+        }
+        // ---------------------------------------------
+    }
+
+    /**
+     * Credit 10% admin TDS income to the admin member directly.
+     * No further deductions (no tier, no TDS) are applied — admin is the final recipient.
+     */
+    private function creditAdminTdsIncome(
+        Member $admin,
+        float $tdsAmount,
+        string $sourceIncomeType,
+        $sourceType,
+        $sourceId,
+        int $fromMemberId,
+        float $originalIncomeAmount,
+        array $meta = [],
+    ): void {
+        // Credit admin's wallet
+        $admin->wallet_balance += $tdsAmount;
+        $admin->wallet_total_earned += $tdsAmount;
+        $admin->tds_income += $tdsAmount;
+        $admin->save();
+
+        // Create income transaction
+        IncomeTransaction::create([
+            'member_id' => $admin->id,
+            'type' => 'TDS_INCOME',
+            'amount' => $tdsAmount,
+            'bv' => 0,
+            'source_type' => $sourceType,
+            'source_id' => $sourceId,
+            'from_member_id' => $fromMemberId,
+            'description' => "10% admin TDS income on {$sourceIncomeType} from member #{$fromMemberId}",
+            'meta' => array_merge([
+                'source_income_type' => $sourceIncomeType,
+                'source_income_amount' => $originalIncomeAmount,
+                'source_member_id' => $fromMemberId,
+                'tds_percentage' => 10,
+            ], $meta),
+            'is_capped' => false,
+        ]);
+
+        // Create wallet transaction
+        WalletTransaction::create([
+            'member_id' => $admin->id,
+            'type' => 'CREDIT',
+            'amount' => $tdsAmount,
+            'balance_after' => $admin->wallet_balance,
+            'reference' => 'TDS-' . now()->timestamp . '-' . $admin->id,
+            'context' => 'TDS_INCOME',
+            'meta' => [
+                'from_member_id' => $fromMemberId,
+                'source_income_type' => $sourceIncomeType,
+                'source_income_amount' => $originalIncomeAmount,
+            ],
         ]);
     }
 
@@ -545,6 +703,8 @@ class MLMIncomeService
             'REPURCHASE_MATCHING' => 'Repurchase matching income (' . ($meta['percentage'] ?? 10) . '%)',
             'REPURCHASE_REWARD' => 'Repurchase reward income (' . ($meta['percentage'] ?? 20) . '%)',
             'SPONSOR_AWARD' => 'Sponsor award from repurchase (' . ($meta['percentage'] ?? 20) . '%)',
+            'TIER_INCOME' => '5% tier income on ' . ($meta['source_income_type'] ?? 'downline') . ' income',
+            'TDS_INCOME' => '10% admin TDS income on ' . ($meta['source_income_type'] ?? 'member') . ' income',
             default => 'Income',
         };
     }

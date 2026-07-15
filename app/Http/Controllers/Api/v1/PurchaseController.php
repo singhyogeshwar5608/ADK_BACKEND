@@ -68,6 +68,7 @@ class PurchaseController extends Controller
                             'bv' => $product->bv,
                             'total_price' => $totalPrice,
                             'total_bv' => $totalBV,
+                            'hsn_code' => $product->hsn_code,
                         ],
                     ],
                 ]);
@@ -131,6 +132,7 @@ class PurchaseController extends Controller
             'member_name' => $member->full_name,
             'wallet_balance' => (float) $member->wallet_balance,
             'wallet_total_earned' => (float) $member->wallet_total_earned,
+            'tds_income' => (float) $member->tds_income,
             'weekly_income' => (float) $member->weekly_income,
             'weekly_cap_remaining' => 50000 - (float) $member->weekly_income,
             'is_active' => (bool) $member->is_active,

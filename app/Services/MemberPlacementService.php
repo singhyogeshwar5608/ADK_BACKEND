@@ -45,6 +45,20 @@ class MemberPlacementService
             ]);
         }
 
+        // Auto-balance: agar last 4 direct children same leg mein hain to opposite leg force karo
+        $lastFourLegs = Member::where('sponsor_id', $sponsor->id)
+            ->when($excludeMemberId, fn ($q) => $q->where('id', '!=', $excludeMemberId))
+            ->orderBy('id', 'desc')
+            ->limit(4)
+            ->pluck('leg');
+
+        if ($lastFourLegs->count() === 4 && $lastFourLegs->unique()->count() === 1) {
+            $lastFourSameLeg = $lastFourLegs->first();
+            if ($lastFourSameLeg === $normalizedLeg) {
+                $normalizedLeg = $lastFourSameLeg === 'LEFT' ? 'RIGHT' : 'LEFT';
+            }
+        }
+
         $placement = self::attemptPlacement($sponsor, $normalizedLeg, $excludeMemberId);
 
         if ($placement) {

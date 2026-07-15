@@ -100,6 +100,11 @@ class MemberResource extends JsonResource
                     'number' => $this->pan_number,
                     'image' => $this->pan_image,
                 ],
+                'nominee' => [
+                    'name' => $this->nominee_name,
+                    'aadharNumber' => $this->nominee_aadhar_number,
+                    'aadharImage' => $this->nominee_aadhar_image,
+                ],
                 'status' => $this->kyc_status,
                 'rejectionReason' => $this->kyc_rejection_reason,
                 'verifiedAt' => $this->kyc_verified_at?->toIso8601String(),

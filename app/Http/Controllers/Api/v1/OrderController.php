@@ -183,62 +183,73 @@ class OrderController extends Controller
                 'shipping_details.address' => 'required_with:shipping_details|string',
             ]);
 
-            $subtotal = 0;
-            $totalBv = 0;
-            $items = [];
+            $order = DB::transaction(function () use ($validated, $user) {
+                $subtotal = 0;
+                $totalBv = 0;
+                $items = [];
 
-            foreach ($validated['items'] as $item) {
-                $itemTotal = $item['price'] * $item['quantity'];
-                $itemBv = $item['bv'] * $item['quantity'];
-                
-                $subtotal += $itemTotal;
-                $totalBv += $itemBv;
-                
-                $items[] = [
-                    'product_id' => $item['product_id'],
-                    'product_name' => $item['product_name'] ?? 'Product',
-                    'quantity' => $item['quantity'],
-                    'price' => $item['price'],
-                    'bv' => $item['bv'],
-                    'total' => $itemTotal,
-                    'total_bv' => $itemBv,
-                ];
-            }
+                foreach ($validated['items'] as $item) {
+                    $product = Product::lockForUpdate()->findOrFail($item['product_id']);
 
-            $order = Order::create([
-                'member_id' => $user->id,
-                'member_snapshot' => [
-                    'memberId' => $user->member_id ?? $user->id,
-                    'fullName' => $user->full_name,
-                    'email' => $user->email,
-                    'phone' => $user->phone,
-                ],
-                'items' => $items,
-                'subtotal' => $validated['total_amount'],
-                'discount' => 0,
-                'total' => $validated['total_amount'],
-                'total_bv' => $totalBv,
-                'status' => 'PENDING',
-                'payment_method' => 'mock',
-                'payment_status' => 'PAID',
-                'shipping_address' => $validated['shipping_details'] ?? null,
-                'history' => [
-                    [
-                        'status' => 'PENDING',
-                        'payment_status' => 'PENDING',
-                        'timestamp' => now()->toISOString(),
-                        'actor' => 'system',
-                        'note' => 'Mock order created for testing'
+                    if ($product->stock < $item['quantity']) {
+                        throw new \Exception("Insufficient stock for product: {$product->name}");
+                    }
+
+                    $product->decrement('stock', $item['quantity']);
+
+                    $itemTotal = $item['price'] * $item['quantity'];
+                    $itemBv = $item['bv'] * $item['quantity'];
+                    
+                    $subtotal += $itemTotal;
+                    $totalBv += $itemBv;
+                    
+                    $items[] = [
+                        'product_id' => $product->id,
+                        'product_name' => $product->name,
+                        'quantity' => $item['quantity'],
+                        'price' => $item['price'],
+                        'bv' => $item['bv'],
+                        'total' => $itemTotal,
+                        'total_bv' => $itemBv,
+                        'hsn_code' => $product->hsn_code,
+                    ];
+                }
+
+                return Order::create([
+                    'member_id' => $user->id,
+                    'member_snapshot' => [
+                        'memberId' => $user->member_id ?? $user->id,
+                        'fullName' => $user->full_name,
+                        'email' => $user->email,
+                        'phone' => $user->phone,
                     ],
-                    [
-                        'status' => 'PENDING',
-                        'payment_status' => 'PAID',
-                        'timestamp' => now()->toISOString(),
-                        'actor' => 'system',
-                        'note' => 'Mock order payment confirmed'
+                    'items' => $items,
+                    'subtotal' => $validated['total_amount'],
+                    'discount' => 0,
+                    'total' => $validated['total_amount'],
+                    'total_bv' => $totalBv,
+                    'status' => 'PENDING',
+                    'payment_method' => 'mock',
+                    'payment_status' => 'PAID',
+                    'shipping_address' => $validated['shipping_details'] ?? null,
+                    'history' => [
+                        [
+                            'status' => 'PENDING',
+                            'payment_status' => 'PENDING',
+                            'timestamp' => now()->toISOString(),
+                            'actor' => 'system',
+                            'note' => 'Mock order created for testing'
+                        ],
+                        [
+                            'status' => 'PENDING',
+                            'payment_status' => 'PAID',
+                            'timestamp' => now()->toISOString(),
+                            'actor' => 'system',
+                            'note' => 'Mock order payment confirmed'
+                        ],
                     ],
-                ],
-            ]);
+                ]);
+            });
             
             $this->bvService->awardForOrder($order);
             $this->syncWithShiprocket($order);
@@ -292,7 +303,14 @@ class OrderController extends Controller
         try {
             $order = DB::transaction(function () use ($validated) {
                 $items = array_map(function ($item) {
-                    $product = Product::findOrFail($item['product_id']);
+                    $product = Product::lockForUpdate()->findOrFail($item['product_id']);
+
+                    if ($product->stock < $item['quantity']) {
+                        throw new \Exception("Insufficient stock for product: {$product->name}");
+                    }
+
+                    $product->decrement('stock', $item['quantity']);
+
                     return [
                         'product_id' => $product->id,
                         'product_name' => $product->name,
@@ -300,6 +318,7 @@ class OrderController extends Controller
                         'price' => $item['price'],
                         'bv' => $product->bv,
                         'total' => $item['price'] * $item['quantity'],
+                        'hsn_code' => $product->hsn_code,
                     ];
                 }, $validated['items']);
 

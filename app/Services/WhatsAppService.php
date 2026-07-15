@@ -147,7 +147,9 @@ class WhatsAppService
             $qty = $item['quantity'] ?? 1;
             $price = (float) ($item['price'] ?? 0);
             $total = (float) ($item['total'] ?? ($price * $qty));
-            $itemLines .= "{$index}. {$name} (Qty: {$qty}, Price: ₹" . number_format($price, 2) . ")\n";
+            $hsn = $item['hsn_code'] ?? null;
+            $hsnPart = $hsn ? ", HSN: {$hsn}" : '';
+            $itemLines .= "{$index}. {$name} (Qty: {$qty}, Price: ₹" . number_format($price, 2) . $hsnPart . ")\n";
             $index++;
         }
 

@@ -128,6 +128,65 @@ class MediaController extends Controller
         }
     }
 
+    public function uploadKycDoc(Request $request): JsonResponse
+    {
+        $user = $request->user();
+        if (!$user) {
+            return response()->json(['error' => 'Unauthenticated.'], 401);
+        }
+
+        $file = $request->file('file');
+
+        if (!$file) {
+            throw ValidationException::withMessages([
+                'file' => 'No file was provided.',
+            ]);
+        }
+
+        try {
+            $uploadPreset = trim((string) config('services.cloudinary.upload_preset', ''));
+            $cloudName = trim((string) config('services.cloudinary.cloud_name', ''));
+
+            if ($uploadPreset === '' || $cloudName === '') {
+                throw ValidationException::withMessages([
+                    'file' => 'Missing Cloudinary preset or cloud name.',
+                ]);
+            }
+
+            $uploadResult = $this->cloudinaryUnsignedImageUpload(
+                $file,
+                $cloudName,
+                $uploadPreset,
+                'members/kyc',
+            );
+
+            $publicUrl = $uploadResult['secure_url'] ?? $uploadResult['url'] ?? null;
+
+            if (! is_string($publicUrl) || $publicUrl === '') {
+                throw new \RuntimeException('Cloudinary response missing image URL');
+            }
+
+            return response()->json([
+                'file' => [
+                    'url' => $publicUrl,
+                    'secureUrl' => $publicUrl,
+                    'name' => $file->getClientOriginalName(),
+                ],
+            ], 201);
+        } catch (ValidationException $e) {
+            throw $e;
+        } catch (\Throwable $e) {
+            Log::error('KYC document upload failed', [
+                'error' => $e->getMessage(),
+                'file' => $file->getClientOriginalName(),
+            ]);
+
+            throw ValidationException::withMessages([
+                'file' => 'Failed to upload KYC document: ' . $e->getMessage(),
+            ]);
+        }
+    }
+
     public function uploadMemberQrCode(Request $request): JsonResponse
     {
         $user = $request->user();
