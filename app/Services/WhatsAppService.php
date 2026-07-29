@@ -172,11 +172,11 @@ class WhatsAppService
         $customerPhone = $this->formatPhone($member->phone ?? '');
 
         return "Asli Desi Kisan Pvt. Ltd,\n\n"
-             . "Your Order Number *#{$order->id}* is under process.\n\n"
+             . "Your Order Number *#{$order->order_number}* is under process.\n\n"
              . "📦 *Order Details:*\n"
              . $itemLines . "\n"
              . "💰 *Total Amount:* ₹" . number_format((float) $order->total, 2) . "\n"
-             . "💳 *Payment ID:* {$order->id}\n"
+             . "💳 *Payment ID:* {$order->order_number}\n"
              . $shippingAddr . "\n\n"
              . "👤 *Customer Details:*\n"
              . "Name: {$member->full_name}\n"
@@ -205,7 +205,7 @@ class WhatsAppService
         $customerPhone = $this->formatPhone($member->phone ?? '');
 
         $message = "📦 *Order Status Update*\n\n"
-                 . "Order Number *#{$order->id}*\n"
+                 . "Order Number *#{$order->order_number}*\n"
                  . "Customer: {$member->full_name}\n"
                  . "Phone: {$customerPhone}\n"
                  . "Status Changed: {$oldLabel} → {$newLabel}\n\n";

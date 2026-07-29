@@ -11,6 +11,7 @@ class Order extends Model
     use HasFactory;
 
     protected $fillable = [
+        'order_number',
         'member_id',
         'member_snapshot',
         'items',
@@ -47,6 +48,7 @@ class Order extends Model
     ];
 
     protected $casts = [
+        'order_number' => 'integer',
         'member_id' => 'integer',
         'member_snapshot' => 'array',
         'items' => 'array',
@@ -65,6 +67,18 @@ class Order extends Model
         'created_at' => 'datetime',
         'updated_at' => 'datetime',
     ];
+
+    protected static function boot(): void
+    {
+        parent::boot();
+
+        static::creating(function (Order $order) {
+            if ($order->order_number === null) {
+                $max = self::query()->max('order_number') ?? 0;
+                $order->order_number = $max + 1;
+            }
+        });
+    }
 
     public function member(): BelongsTo
     {

@@ -20,6 +20,7 @@ class OrderResource extends JsonResource
     {
         return [
             'id' => (string) $this->id,
+            'orderNumber' => $this->order_number,
             'memberSnapshot' => [
                 'memberId' => data_get($this->member_snapshot, 'memberId'),
                 'fullName' => data_get($this->member_snapshot, 'fullName'),

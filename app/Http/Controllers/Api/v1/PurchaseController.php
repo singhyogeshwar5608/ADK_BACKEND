@@ -54,7 +54,6 @@ class PurchaseController extends Controller
                 // Create order
                 $order = Order::create([
                     'member_id' => $member->id,
-                    'order_number' => 'ORD-' . strtoupper(uniqid()),
                     'total_amount' => $totalPrice,
                     'total_bv' => $totalBV,
                     'status' => 'PENDING',
@@ -87,6 +86,11 @@ class PurchaseController extends Controller
                     $order->id,
                     $isRepurchase
                 );
+
+                // Track self-purchase BV and total BV for the purchaser
+                $member->bv_total += $totalBV;
+                $member->self_purchase_bv += $totalBV;
+                $member->save();
 
                 // Mark order as BV awarded
                 $order->bv_awarded_at = now();
@@ -132,7 +136,6 @@ class PurchaseController extends Controller
             'member_name' => $member->full_name,
             'wallet_balance' => (float) $member->wallet_balance,
             'wallet_total_earned' => (float) $member->wallet_total_earned,
-            'tds_income' => (float) $member->tds_income,
             'weekly_income' => (float) $member->weekly_income,
             'weekly_cap_remaining' => 50000 - (float) $member->weekly_income,
             'is_active' => (bool) $member->is_active,
