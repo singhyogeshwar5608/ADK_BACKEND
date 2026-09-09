@@ -4,7 +4,6 @@ namespace App\Services;
 
 use App\Models\IncomeTransaction;
 use App\Models\Member;
-use App\Models\Order;
 use App\Models\WalletTransaction;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -26,10 +25,13 @@ class MLMIncomeService
     private const MATCH_RATIO = '1:1';
     
     // Reward eligibility
-    private const REWARD_DIRECT_REFERRALS_REQUIRED = 25;
+    private const REWARD_DIRECT_REFERRALS_REQUIRED = 30;
     
     // Minimum BV threshold for sponsor income / award kit income
     private const KIT_BV_THRESHOLD = 5000;
+
+    // Minimum self-purchase BV required to be eligible for downline income
+    private const SELF_PURCHASE_BV_THRESHOLD = 5000;
 
     public function __construct(
         private readonly MatchingService $matchingService,
@@ -66,33 +68,60 @@ class MLMIncomeService
             $selfIncome = $this->distributeSelfIncome($purchaser, $bv, $sourceType, $sourceId, $isRepurchase);
             $results['self_income'] = $selfIncome;
             
-            // 2. Sponsor Income (first purchase, any BV) / Sponsor Award (repurchase >= 5000BV)
+            // 2. Sponsor Income (first purchase, any BV) + Sponsor Award (cumulative 5000 BV blocks,
+            //    starting from the second purchase onward — first purchase BV is excluded)
+            $cumulativeBv = (float) $purchaser->self_purchase_bv + $bv;
+            $isFirstPurchase = !$purchaser->first_purchase_at;
+
+            if ($isFirstPurchase) {
+                $newBlocks = 0;
+                $purchaser->sponsor_award_tracked_bv = $cumulativeBv;
+            } else {
+                $uncountedBv = max(0.0, $cumulativeBv - (float) $purchaser->sponsor_award_tracked_bv);
+                $newBlocks = (int) floor($uncountedBv / self::KIT_BV_THRESHOLD);
+                if ($newBlocks > 0) {
+                    $purchaser->sponsor_award_tracked_bv = (float) $purchaser->sponsor_award_tracked_bv + ($newBlocks * self::KIT_BV_THRESHOLD);
+                }
+            }
+
             if ($purchaser->sponsor_id) {
                 $sponsor = $this->resolveSponsor($purchaser);
                 if ($sponsor) {
-                    $hasPreviousSponsorIncome = IncomeTransaction::where('type', 'SPONSOR')
-                        ->where('member_id', $sponsor->id)
-                        ->where('from_member_id', $purchaser->id)
-                        ->exists();
+                    if (!$this->isIncomeEligible($sponsor)) {
+                        Log::info('MLMIncomeService: Sponsor not income eligible (self_purchase_bv < ' . self::SELF_PURCHASE_BV_THRESHOLD . ')', [
+                            'sponsor_id' => $sponsor->id,
+                            'sponsor_member_id' => $sponsor->member_id,
+                            'sponsor_self_purchase_bv' => $sponsor->self_purchase_bv,
+                            'purchaser_member_id' => $purchaser->member_id,
+                            'bv' => $bv,
+                            'cumulative_bv' => $cumulativeBv,
+                            'new_blocks' => $newBlocks,
+                        ]);
+                    } else {
+                        $hasPreviousSponsorIncome = IncomeTransaction::where('type', 'SPONSOR')
+                            ->where('member_id', $sponsor->id)
+                            ->where('from_member_id', $purchaser->id)
+                            ->exists();
                     
-                    Log::info('MLMIncomeService: Sponsor income check', [
-                        'purchaser_id' => $purchaser->id,
-                        'purchaser_member_id' => $purchaser->member_id,
-                        'sponsor_id' => $sponsor->id,
-                        'sponsor_member_id' => $sponsor->member_id,
-                        'bv' => $bv,
-                        'has_previous_sponsor_income' => $hasPreviousSponsorIncome,
-                        'is_repurchase' => $isRepurchase,
-                    ]);
+                        Log::info('MLMIncomeService: Sponsor income check', [
+                            'purchaser_id' => $purchaser->id,
+                            'purchaser_member_id' => $purchaser->member_id,
+                            'sponsor_id' => $sponsor->id,
+                            'sponsor_member_id' => $sponsor->member_id,
+                            'bv' => $bv,
+                            'cumulative_bv' => $cumulativeBv,
+                            'new_blocks' => $newBlocks,
+                            'has_previous_sponsor_income' => $hasPreviousSponsorIncome,
+                            'is_repurchase' => $isRepurchase,
+                        ]);
                     
-                    if (!$hasPreviousSponsorIncome) {
-                        // First purchase (any BV) → sponsor income
-                        $sponsorIncome = $this->distributeSponsorIncome($purchaser, $bv, $sourceType, $sourceId);
-                        $results['sponsor_income'] = $sponsorIncome;
-                    } elseif ($bv >= self::KIT_BV_THRESHOLD) {
-                        // Repurchase ≥ 5000 BV → sponsor award
-                        $sponsorAward = $this->distributeSponsorAward($purchaser, $bv, $sourceType, $sourceId);
-                        $results['sponsor_award'] = $sponsorAward;
+                        if (!$hasPreviousSponsorIncome) {
+                            $sponsorIncome = $this->distributeSponsorIncome($purchaser, $bv, $sourceType, $sourceId);
+                            $results['sponsor_income'] = $sponsorIncome;
+                        } elseif ($newBlocks > 0) {
+                            $sponsorAward = $this->distributeSponsorAward($purchaser, $bv, $sourceType, $sourceId, $newBlocks);
+                            $results['sponsor_award'] = $sponsorAward;
+                        }
                     }
                 } else {
                     Log::warning('MLMIncomeService: Sponsor not found for purchase', [
@@ -117,7 +146,7 @@ class MLMIncomeService
             
             // 6. Update member activity status
             $isOrder = $sourceType === 'ORDER';
-            $this->updateMemberActivity($purchaser, $bv, $isOrder ? $sourceId : null);
+            $this->updateMemberActivity($purchaser, $bv, $isOrder ? $sourceId : null, $newBlocks);
         });
         
         return $results;
@@ -277,6 +306,18 @@ class MLMIncomeService
                 break;
             }
             
+            // Skip matching income if parent is not income eligible
+            if (!$this->isIncomeEligible($parent)) {
+                Log::info('MLMIncomeService: Ancestor not income eligible for matching', [
+                    'ancestor_id' => $parent->id,
+                    'ancestor_member_id' => $parent->member_id,
+                    'ancestor_self_purchase_bv' => $parent->self_purchase_bv,
+                    'purchaser_member_id' => $purchaser->member_id,
+                ]);
+                array_pop($segments);
+                continue;
+            }
+            
             // Calculate and distribute matching income
             $matchingResult = $this->matchingService->calculateAndDistributeMatching($parent, $isRepurchase);
             
@@ -334,6 +375,19 @@ class MLMIncomeService
     }
 
     /**
+     * Check if a member is eligible to receive income from downline.
+     * Requires minimum self-purchase BV threshold.
+     * Admin/root members are always eligible.
+     */
+    private function isIncomeEligible(Member $member): bool
+    {
+        if ($member->role === 'ADMIN') {
+            return true;
+        }
+        return (float) ($member->self_purchase_bv ?? 0) >= self::SELF_PURCHASE_BV_THRESHOLD;
+    }
+
+    /**
      * Apply weekly income cap
      */
     private function applyWeeklyCap(Member $member, float $amount): float
@@ -367,9 +421,8 @@ class MLMIncomeService
 
     /**
      * Credit wallet and create transaction records
-     * Applies 5% tier deduction on ALL income types, crediting the sponsor recursively.
-     * Applies 10% admin TDS deduction on ALL income types (except TDS_INCOME itself),
-     * crediting the admin member.
+     * Full amount is credited to member — no deductions.
+     * Tier (5%) is deducted monthly via dedicated command.
      */
     private function creditWallet(
         Member $member,
@@ -381,68 +434,13 @@ class MLMIncomeService
         ?int $fromMemberId,
         array $meta = []
     ): void {
-        // Save original amount before any deductions
-        $originalAmount = $amount;
-
-        // --- 5% Tier Deduction: deduct from ALL income, credit to sponsor (cascading) ---
-        $tierAmount = 0.0;
-        $tierSponsor = null;
-
-        if ($amount > 0) {
-            $tierAmount = round($amount * 0.05, 2);
-            if ($tierAmount > 0) {
-                if ($member->referred_by) {
-                    $tierSponsor = Member::where('member_id', $member->referred_by)->lockForUpdate()->first();
-                }
-                if (!$tierSponsor && $member->sponsor_id) {
-                    $tierSponsor = Member::lockForUpdate()->find($member->sponsor_id);
-                }
-                if ($tierSponsor) {
-                    $amount = round($amount - $tierAmount, 2);
-                } else {
-                    $tierAmount = 0.0;
-                }
-            }
-        }
-        // ---------------------------------------------------------------------------
-
-        // --- 10% Admin TDS Deduction: deduct from ALL income (except TDS_INCOME), credit to admin ---
-        $adminTdsAmount = 0.0;
-        $admin = null;
-
-        if ($type !== 'TDS_INCOME' && $amount > 0) {
-            // Calculate TDS on the original income amount (before any deductions)
-            $originalForTds = $amount + $tierAmount;
-            $adminTdsAmount = round($originalForTds * 0.10, 2);
-            if ($adminTdsAmount > 0) {
-                $admin = Member::where('role', 'ADMIN')->lockForUpdate()->first();
-                // Skip TDS if recipient is the admin themselves
-                if ($admin && $admin->id !== $member->id) {
-                    $amount = round($amount - $adminTdsAmount, 2);
-                } else {
-                    $adminTdsAmount = 0.0;
-                    $admin = null;
-                }
-            }
-        }
-        // ---------------------------------------------------------------------------
-
-        // Update member wallet
+        // Update member wallet (full amount, no deductions)
         $member->wallet_balance += $amount;
         $member->wallet_total_earned += $amount;
         $member->weekly_income += $amount;
         $member->save();
         
         // Create income transaction
-        $mergedMeta = $meta;
-        if ($tierAmount > 0 && $tierSponsor) {
-            $mergedMeta['tier_deducted'] = $tierAmount;
-            $mergedMeta['tier_sponsor_id'] = $tierSponsor->id;
-        }
-        if ($adminTdsAmount > 0 && $admin) {
-            $mergedMeta['admin_tds_deducted'] = $adminTdsAmount;
-            $mergedMeta['admin_tds_admin_id'] = $admin->id;
-        }
         try {
             IncomeTransaction::create([
                 'member_id' => $member->id,
@@ -453,7 +451,7 @@ class MLMIncomeService
                 'source_id' => $sourceId,
                 'from_member_id' => $fromMemberId,
                 'description' => $this->getIncomeDescription($type, $meta),
-                'meta' => $mergedMeta,
+                'meta' => $meta,
                 'is_capped' => $meta['capped'] ?? false,
             ]);
         } catch (\Throwable $e) {
@@ -473,114 +471,14 @@ class MLMIncomeService
             'balance_after' => $member->wallet_balance,
             'reference' => strtoupper(substr($type, 0, 3)) . '-' . now()->timestamp . '-' . $member->id,
             'context' => $type . '_INCOME',
-            'meta' => $mergedMeta,
-        ]);
-
-        // --- Credit 5% tier income to the sponsor (recursive — own 5% deducted too) ---
-        if ($tierSponsor && $tierAmount > 0) {
-            $originalAmount = $amount + $tierAmount + ($adminTdsAmount > 0 ? $adminTdsAmount : 0);
-            // Apply sponsor's weekly cap, then recurse
-            $this->resetWeeklyIncomeIfNeeded($tierSponsor);
-            $remainingCap = $this->weeklyCap - (float) $tierSponsor->weekly_income;
-            $cappedTier = $remainingCap > 0 ? min($tierAmount, $remainingCap) : 0.0;
-
-            if ($cappedTier > 0) {
-                $this->creditWallet(
-                    $tierSponsor,
-                    $cappedTier,
-                    'TIER_INCOME',
-                    0,
-                    $sourceType,
-                    $sourceId,
-                    $member->id,
-                    [
-                        'source_member_id' => $member->id,
-                        'source_income_type' => $type,
-                        'source_income_amount' => $originalAmount,
-                        'tier_percentage' => 5,
-                        'original_amount' => $tierAmount,
-                        'capped' => $cappedTier < $tierAmount,
-                    ]
-                );
-            }
-        }
-        // ---------------------------------------------
-
-        // --- Credit 10% admin TDS income to the admin (no further deductions) ---
-        if ($adminTdsAmount > 0 && $admin) {
-            $this->creditAdminTdsIncome(
-                $admin,
-                $adminTdsAmount,
-                $type,
-                $sourceType,
-                $sourceId,
-                $member->id,
-                $originalAmount,
-                $meta,
-            );
-        }
-        // ---------------------------------------------
-    }
-
-    /**
-     * Credit 10% admin TDS income to the admin member directly.
-     * No further deductions (no tier, no TDS) are applied — admin is the final recipient.
-     */
-    private function creditAdminTdsIncome(
-        Member $admin,
-        float $tdsAmount,
-        string $sourceIncomeType,
-        $sourceType,
-        $sourceId,
-        int $fromMemberId,
-        float $originalIncomeAmount,
-        array $meta = [],
-    ): void {
-        // Credit admin's wallet
-        $admin->wallet_balance += $tdsAmount;
-        $admin->wallet_total_earned += $tdsAmount;
-        $admin->tds_income += $tdsAmount;
-        $admin->save();
-
-        // Create income transaction
-        IncomeTransaction::create([
-            'member_id' => $admin->id,
-            'type' => 'TDS_INCOME',
-            'amount' => $tdsAmount,
-            'bv' => 0,
-            'source_type' => $sourceType,
-            'source_id' => $sourceId,
-            'from_member_id' => $fromMemberId,
-            'description' => "10% admin TDS income on {$sourceIncomeType} from member #{$fromMemberId}",
-            'meta' => array_merge([
-                'source_income_type' => $sourceIncomeType,
-                'source_income_amount' => $originalIncomeAmount,
-                'source_member_id' => $fromMemberId,
-                'tds_percentage' => 10,
-            ], $meta),
-            'is_capped' => false,
-        ]);
-
-        // Create wallet transaction
-        WalletTransaction::create([
-            'member_id' => $admin->id,
-            'type' => 'CREDIT',
-            'amount' => $tdsAmount,
-            'balance_after' => $admin->wallet_balance,
-            'reference' => 'TDS-' . now()->timestamp . '-' . $admin->id,
-            'context' => 'TDS_INCOME',
-            'meta' => [
-                'from_member_id' => $fromMemberId,
-                'source_income_type' => $sourceIncomeType,
-                'source_income_amount' => $originalIncomeAmount,
-            ],
+            'meta' => $meta,
         ]);
     }
 
     /**
      * Update member activity status
      */
-    private function updateMemberActivity(Member $member, float $bv, ?int $currentOrderId = null): void
+    private function updateMemberActivity(Member $member, float $bv, ?int $currentOrderId = null, int $newBlocks = 0): void
     {
         $isFirstPurchase = !$member->first_purchase_at;
 
@@ -592,19 +490,11 @@ class MLMIncomeService
             ? ['field' => 'member_id', 'value' => $member->referred_by]
             : ($member->sponsor_id ? ['field' => 'id', 'value' => $member->sponsor_id] : null);
 
-        // Family Tour Award: count when ANY purchase ≥ 5000 BV
-        // (first time or repurchase, as long as this member hasn't been counted before)
-        if ($referrerMethod && $bv >= self::KIT_BV_THRESHOLD && $member->status === 'ACTIVE') {
-            $alreadyHasHighBvOrder = Order::where('member_id', $member->id)
-                ->where('total_bv', '>=', self::KIT_BV_THRESHOLD)
-                ->when($currentOrderId, fn ($q) => $q->where('id', '!=', $currentOrderId))
-                ->exists();
-
-            if (!$alreadyHasHighBvOrder) {
-                Member::query()
-                    ->where($referrerMethod['field'], $referrerMethod['value'])
-                    ->increment('stats_direct_refs');
-            }
+        // Family Tour Award: +1 per cumulative 5000 BV block completed
+        if ($referrerMethod && $newBlocks > 0 && $member->status === 'ACTIVE') {
+            Member::query()
+                ->where($referrerMethod['field'], $referrerMethod['value'])
+                ->increment('stats_direct_refs', $newBlocks);
         }
 
         // On first purchase, increment reward eligibility count regardless of BV
@@ -656,9 +546,10 @@ class MLMIncomeService
     }
 
     /**
-     * Distribute Sponsor Award for repurchases (5000 BV kit repurchase = ₹1000 to sponsor)
+     * Distribute Sponsor Award for cumulative 5000 BV blocks.
+     * Each completed 5000 BV block pays the sponsor ₹1000 (5000 × 20%).
      */
-    private function distributeSponsorAward(Member $purchaser, float $bv, $sourceType, $sourceId): ?array
+    private function distributeSponsorAward(Member $purchaser, float $bv, $sourceType, $sourceId, int $blocks = 1): ?array
     {
         $sponsor = $this->resolveSponsor($purchaser);
         
@@ -666,17 +557,19 @@ class MLMIncomeService
             return null;
         }
         
-        // Sponsor Award: Use sponsor award percentage from settings
+        // Sponsor Award: block amount = number of completed 5000 BV blocks × 20%
+        $blockBv = $blocks * self::KIT_BV_THRESHOLD;
         $percentage = $this->sponsorAwardPercent;
-        $amount = $bv * $percentage;
+        $amount = $blockBv * $percentage;
         $cappedAmount = $this->applyWeeklyCap($sponsor, $amount);
         
         if ($cappedAmount > 0) {
-            $this->creditWallet($sponsor, $cappedAmount, 'SPONSOR_AWARD', $bv, $sourceType, $sourceId, $purchaser->id, [
+            $this->creditWallet($sponsor, $cappedAmount, 'SPONSOR_AWARD', $blockBv, $sourceType, $sourceId, $purchaser->id, [
                 'percentage' => $percentage * 100,
                 'original_amount' => $amount,
                 'capped' => $amount !== $cappedAmount,
                 'repurchase_by' => $purchaser->id,
+                'blocks' => $blocks,
             ]);
         }
         
@@ -685,6 +578,7 @@ class MLMIncomeService
             'purchaser_id' => $purchaser->id,
             'amount' => $cappedAmount,
             'original_amount' => $amount,
+            'blocks' => $blocks,
             'capped' => $amount !== $cappedAmount,
         ];
     }
@@ -703,8 +597,7 @@ class MLMIncomeService
             'REPURCHASE_MATCHING' => 'Repurchase matching income (' . ($meta['percentage'] ?? 10) . '%)',
             'REPURCHASE_REWARD' => 'Repurchase reward income (' . ($meta['percentage'] ?? 20) . '%)',
             'SPONSOR_AWARD' => 'Sponsor award from repurchase (' . ($meta['percentage'] ?? 20) . '%)',
-            'TIER_INCOME' => '5% tier income on ' . ($meta['source_income_type'] ?? 'downline') . ' income',
-            'TDS_INCOME' => '10% admin TDS income on ' . ($meta['source_income_type'] ?? 'member') . ' income',
+            'MONTHLY_TIER' => '5% monthly tier income from ' . ($meta['source_member_name'] ?? 'member') . ' income',
             default => 'Income',
         };
     }

@@ -20,6 +20,10 @@ class MemberUpdateRequest extends FormRequest
             $payload['full_name'] = $this->input('fullName');
         }
 
+        if ($this->has('password')) {
+            $payload['password'] = $this->input('password');
+        }
+
         if ($this->has('sponsorId')) {
             $payload['sponsor_id'] = $this->input('sponsorId');
         }
@@ -63,6 +67,9 @@ class MemberUpdateRequest extends FormRequest
         if ($this->has('aadharImage')) {
             $payload['aadhar_image'] = $this->input('aadharImage');
         }
+        if ($this->has('aadharBackImage')) {
+            $payload['aadhar_back_image'] = $this->input('aadharBackImage');
+        }
         if ($this->has('qrCodeImage')) {
             $payload['qr_code_image'] = $this->input('qrCodeImage');
         }
@@ -77,6 +84,9 @@ class MemberUpdateRequest extends FormRequest
         if ($this->has('nomineeAadharImage')) {
             $payload['nominee_aadhar_image'] = $this->input('nomineeAadharImage');
         }
+        if ($this->has('nomineeAadharBackImage')) {
+            $payload['nominee_aadhar_back_image'] = $this->input('nomineeAadharBackImage');
+        }
 
         if (! empty($payload)) {
             $this->merge($payload);
@@ -87,12 +97,15 @@ class MemberUpdateRequest extends FormRequest
     {
         return [
             'full_name' => ['sometimes', 'string', 'min:2'],
+            'password' => ['sometimes', 'nullable', 'string', 'min:8'],
             'email' => ['sometimes', 'email'],
             'phone' => ['sometimes', 'string'],
             'status' => ['sometimes', 'in:ACTIVE,SUSPENDED,PENDING'],
             'type' => ['sometimes', 'in:LEADER,USER'],
             'leg' => ['sometimes', 'in:LEFT,RIGHT'],
             'profile_image' => ['sometimes', 'nullable', 'url'],
+            // Sponsor re-assignment (resolved + cycle-guarded in MemberController)
+            'sponsor_id' => ['sometimes', 'nullable', 'string', 'max:50'],
             // KYC fields
             'bank_account_number' => ['sometimes', 'nullable', 'string', 'max:50'],
             'bank_account_image' => ['sometimes', 'nullable', 'string', 'max:2048'],
@@ -100,11 +113,13 @@ class MemberUpdateRequest extends FormRequest
             'pan_image' => ['sometimes', 'nullable', 'string', 'max:2048'],
             'aadhar_number' => ['sometimes', 'nullable', 'string', 'max:20'],
             'aadhar_image' => ['sometimes', 'nullable', 'string', 'max:2048'],
+            'aadhar_back_image' => ['sometimes', 'nullable', 'string', 'max:2048'],
             'qr_code_image' => ['sometimes', 'nullable', 'string', 'max:2048'],
             // Nominee fields
             'nominee_name' => ['sometimes', 'nullable', 'string', 'max:255'],
             'nominee_aadhar_number' => ['sometimes', 'nullable', 'string', 'max:20'],
             'nominee_aadhar_image' => ['sometimes', 'nullable', 'string', 'max:2048'],
+            'nominee_aadhar_back_image' => ['sometimes', 'nullable', 'string', 'max:2048'],
         ];
     }
 }

@@ -9,6 +9,7 @@ use App\Http\Requests\Auth\RegisterRequest;
 use App\Models\Member;
 use App\Services\MemberPlacementService;
 use App\Services\MemberStatsService;
+use App\Services\MlmSettingsService;
 use App\Services\ReferralService;
 use App\Support\IdGenerator;
 use Illuminate\Http\JsonResponse;
@@ -18,8 +19,10 @@ use Illuminate\Validation\ValidationException;
 
 class AuthController extends Controller
 {
-    public function __construct(private readonly MemberStatsService $statsService)
-    {
+    public function __construct(
+        private readonly MemberStatsService $statsService,
+        private readonly MlmSettingsService $settingsService,
+    ) {
     }
 
     public function register(RegisterRequest $request): JsonResponse
@@ -210,46 +213,40 @@ class AuthController extends Controller
             'bv_right_leg' => $member->bv_right_leg,
             'total_matched_bv' => $member->total_matched_bv,
         ]);
-        
-        // Direct income from income_ledger (legacy); matching uses income_transactions below
-        $directIncome = $member->incomeLedger()
+
+        // Income cycle start comes from the admin-managed `income_cycle_start_day`
+        // setting (see MlmSettingsService::getIncomeCycleStart). This replaces the
+        // old temporary subMonth() hack so each month shows only its own income and
+        // there is no cross-month double-counting.
+        $cycleStart = $this->settingsService->getIncomeCycleStart();
+
+        $incomeQuery = fn($type) => $member->incomeTransactions()
+            ->where('type', $type)
+            ->where('created_at', '>=', $cycleStart);
+
+        $ledgerQuery = fn() => $member->incomeLedger()
             ->where('type', 'direct')
-            ->sum('amount') ?? 0;
+            ->where('created_at', '>=', $cycleStart);
 
-        $selfPurchaseIncome = (float) ($member->incomeTransactions()
-            ->where('type', 'SELF')
-            ->sum('amount') ?? 0);
+        $directIncome = (float) ($ledgerQuery()->sum('amount') ?? 0);
+        $selfPurchaseIncome = (float) ($incomeQuery('SELF')->sum('amount') ?? 0);
+        $selfRepurchaseIncome = (float) ($incomeQuery('REPURCHASE_SELF')->sum('amount') ?? 0);
+        $sponsorIncome = (float) ($incomeQuery('SPONSOR')->sum('amount') ?? 0);
+        $sponsorAwardKitRepurchaseIncome = (float) ($incomeQuery('SPONSOR_AWARD')->sum('amount') ?? 0);
+        $matchingIncomeFromTransactions = (float) ($incomeQuery('MATCHING')->sum('amount') ?? 0);
+        $repurchaseMatchingIncome = (float) ($incomeQuery('REPURCHASE_MATCHING')->sum('amount') ?? 0);
+        $totalEarned = $directIncome + $selfPurchaseIncome + $selfRepurchaseIncome
+            + $sponsorIncome + $sponsorAwardKitRepurchaseIncome
+            + $matchingIncomeFromTransactions + $repurchaseMatchingIncome
+            + (float) $member->downline_monthly_sponsor_income
+            - $this->currentCycleTierDebit($member);
 
-        $selfRepurchaseIncome = (float) ($member->incomeTransactions()
-            ->where('type', 'REPURCHASE_SELF')
-            ->sum('amount') ?? 0);
-
-        $sponsorIncome = (float) ($member->incomeTransactions()
-            ->where('type', 'SPONSOR')
-            ->sum('amount') ?? 0);
-
-        $sponsorAwardKitRepurchaseIncome = (float) ($member->incomeTransactions()
-            ->where('type', 'SPONSOR_AWARD')
-            ->sum('amount') ?? 0);
-
-        $matchingIncomeFromTransactions = (float) ($member->incomeTransactions()
-            ->where('type', 'MATCHING')
-            ->sum('amount') ?? 0);
-
-        $repurchaseMatchingIncome = (float) ($member->incomeTransactions()
-            ->where('type', 'REPURCHASE_MATCHING')
-            ->sum('amount') ?? 0);
-
-        $tdsIncome = (float) ($member->incomeTransactions()
-            ->where('type', 'TDS_INCOME')
-            ->sum('amount') ?? 0);
-        
         $response = [
             'member' => [
                 ...$member->toArray(),
                 'wallet' => [
                     'balance' => $member->wallet_balance,
-                    'totalEarned' => $member->wallet_total_earned,
+                    'totalEarned' => $totalEarned,
                 ],
                 'income' => [
                     'direct' => $directIncome,
@@ -261,7 +258,6 @@ class AuthController extends Controller
                     'sponsorAwardKitRepurchaseIncome' => $sponsorAwardKitRepurchaseIncome,
                     'repurchaseMatchingIncome' => $repurchaseMatchingIncome,
                     'downlineMonthlySponsor' => $member->downline_monthly_sponsor_income,
-                    'tdsIncome' => $tdsIncome,
                 ],
                 'matchingPairs' => [
                     'leftLeg' => $member->bv_left_leg,
@@ -280,22 +276,31 @@ class AuthController extends Controller
         return response()->json($response);
     }
 
+    /**
+     * Total 5% Monthly Tier DEBIT taken from this member's own income during the
+     * current income cycle. Bucketed by the debit's `meta.month`, which matches
+     * the current cycle month derived from the admin-managed `income_cycle_start_day`.
+     * Subtracted from totalEarned so the profile matches the wallet's net figure.
+     */
+    private function currentCycleTierDebit(Member $member): float
+    {
+        $cycleMonth = $this->settingsService->getIncomeCycleStart()->format('Y-m');
+        $debitsByMonth = $this->settingsService->getMonthlyTierDebitByCycle($member->id);
+
+        return round($debitsByMonth[$cycleMonth] ?? 0.0, 2);
+    }
+
     public function teamStats(): JsonResponse
     {
         $member = auth()->user();
 
-        if (!$member->placement_path) {
-            return response()->json([
-                'newThisWeek' => 0,
-                'newThisMonth' => 0,
-                'totalActive' => 0,
-                'pendingKyc' => 0,
-            ]);
-        }
-
-        // Get all members in the user's binary tree (downline by placement_path)
+        // Only DIRECT members (referred by this member OR directly placed under them)
         $teamQuery = Member::query()
-            ->where('placement_path', 'like', $member->placement_path . '.%');
+            ->where(function ($q) use ($member) {
+                $q->where('referred_by', $member->member_id)
+                  ->orWhere('sponsor_id', $member->id);
+            })
+            ->where('id', '!=', $member->id);
         
         // Calculate new members this week (from Monday to today)
         $startOfWeek = now()->startOfWeek();

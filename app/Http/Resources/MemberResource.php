@@ -53,9 +53,11 @@ class MemberResource extends JsonResource
             'address' => $this->address,
             'profileImage' => $this->profile_image,
             'qrCodeUrl' => $this->qr_code_url,
+            'qrCodeImage' => $this->qr_code_image,
             'status' => $this->status,
             /** Yellow (pending_payment) until first order with PAID payment; green (paid) after. */
             'binaryTreePurchaseState' => $this->binaryTreePurchaseState(),
+            'selfPurchaseBv' => (float) $this->self_purchase_bv,
             'role' => $this->role,
             'type' => $this->type ?? 'USER',
             'leg' => $this->leg,
@@ -70,6 +72,7 @@ class MemberResource extends JsonResource
                 'total' => (float) $this->bv_total,
                 'leftLeg' => (float) $this->bv_left_leg,
                 'rightLeg' => (float) $this->bv_right_leg,
+                'totalMatchedBv' => (float) $this->total_matched_bv,
                 'carryForwardLeft' => (float) $this->bv_carry_forward_left,
                 'carryForwardRight' => (float) $this->bv_carry_forward_right,
             ],
@@ -95,6 +98,7 @@ class MemberResource extends JsonResource
                 'aadharCard' => [
                     'number' => $this->aadhar_number,
                     'image' => $this->aadhar_image,
+                    'backImage' => $this->aadhar_back_image,
                 ],
                 'panCard' => [
                     'number' => $this->pan_number,
@@ -104,7 +108,9 @@ class MemberResource extends JsonResource
                     'name' => $this->nominee_name,
                     'aadharNumber' => $this->nominee_aadhar_number,
                     'aadharImage' => $this->nominee_aadhar_image,
+                    'aadharBackImage' => $this->nominee_aadhar_back_image,
                 ],
+                'qrCodeImage' => $this->qr_code_image,
                 'status' => $this->kyc_status,
                 'rejectionReason' => $this->kyc_rejection_reason,
                 'verifiedAt' => $this->kyc_verified_at?->toIso8601String(),

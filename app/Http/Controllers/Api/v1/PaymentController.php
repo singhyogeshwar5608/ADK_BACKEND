@@ -3,15 +3,30 @@
 namespace App\Http\Controllers\Api\v1;
 
 use App\Http\Controllers\Controller;
+use App\Http\Resources\OrderResource;
+use App\Models\Member;
 use App\Models\MlmSetting;
+use App\Models\Order;
+use App\Models\Product;
+use App\Services\BvService;
+use App\Services\ShiprocketService;
+use App\Services\WhatsAppService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
 class PaymentController extends Controller
 {
+    public function __construct(
+        private readonly BvService $bvService,
+        private readonly ShiprocketService $shiprocketService,
+        private readonly WhatsAppService $whatsAppService
+    ) {
+    }
+
     /**
      * Get Razorpay configuration from database
      */
@@ -179,6 +194,264 @@ class PaymentController extends Controller
                 'message' => $e->getMessage(),
             ], 500);
         }
+    }
+
+    /**
+     * Verify a successful Razorpay payment and persist the order.
+     *
+     * Called by the Flutter app right after a successful payment. Verifies the
+     * payment against Razorpay (signature on web, server-side payment fetch on
+     * mobile where the SDK does not return a signature), then creates the order
+     * row so it shows up in the admin panel.
+     */
+    public function confirmPayment(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'razorpay_order_id' => 'required|string',
+            'razorpay_payment_id' => 'required|string',
+            'razorpay_signature' => 'nullable|string',
+            'items' => 'required|array|min:1',
+            'items.*.product_id' => 'required|integer|exists:products,id',
+            'items.*.quantity' => 'required|integer|min:1',
+            'items.*.price' => 'required|numeric|min:0',
+            'items.*.bv' => 'nullable|numeric|min:0',
+            'subtotal' => 'required|numeric|min:0',
+            'tax' => 'nullable|numeric|min:0',
+            'total' => 'required|numeric|min:0',
+            'total_bv' => 'required|numeric|min:0',
+            'shipping_address' => 'required|array',
+            'member_snapshot' => 'nullable|array',
+            'member_checkout' => 'nullable|boolean',
+        ]);
+
+        try {
+            $config = $this->getRazorpayConfig();
+
+            $payment = $this->verifyRazorpayPayment(
+                $validated['razorpay_order_id'],
+                $validated['razorpay_payment_id'],
+                $validated['razorpay_signature'] ?? null,
+                $config,
+                (float) $validated['total'],
+            );
+
+            if (!$payment) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Payment verification failed',
+                ], 400);
+            }
+
+            // Idempotency: never create a second order for the same payment.
+            $existing = Order::where('razorpay_payment_id', $validated['razorpay_payment_id'])->first();
+            if ($existing) {
+                return response()->json([
+                    'success' => true,
+                    'message' => 'Order already confirmed',
+                    'order' => new OrderResource($existing),
+                ]);
+            }
+
+            $member = auth('sanctum')->user();
+            $linkMember = $request->boolean('member_checkout') && $member instanceof Member;
+
+            $order = DB::transaction(function () use ($validated, $member, $linkMember) {
+                $items = [];
+                $subtotal = 0.0;
+                $totalBv = 0.0;
+
+                foreach ($validated['items'] as $item) {
+                    $product = Product::lockForUpdate()->findOrFail($item['product_id']);
+
+                    if ($product->stock < $item['quantity']) {
+                        throw new \Exception("Insufficient stock for product: {$product->name}");
+                    }
+
+                    $product->decrement('stock', $item['quantity']);
+
+                    $price = (float) $item['price'];
+                    $bv = (float) ($item['bv'] ?? $product->bv);
+                    $itemTotal = $price * $item['quantity'];
+                    $itemBv = $bv * $item['quantity'];
+
+                    $subtotal += $itemTotal;
+                    $totalBv += $itemBv;
+
+                    $items[] = [
+                        'product_id' => $product->id,
+                        'product_name' => $product->name,
+                        'quantity' => $item['quantity'],
+                        'price' => $price,
+                        'bv' => $bv,
+                        'total' => $itemTotal,
+                        'total_bv' => $itemBv,
+                        'hsn_code' => $product->hsn_code,
+                    ];
+                }
+
+                $snapshot = $linkMember ? [
+                    'memberId' => $member->member_id,
+                    'fullName' => $member->full_name,
+                    'email' => $member->email,
+                    'phone' => $member->phone,
+                    'serialNo' => $member->serial_no,
+                ] : array_filter([
+                    'memberId' => $validated['member_snapshot']['member_id'] ?? null,
+                    'fullName' => $validated['member_snapshot']['full_name'] ?? null,
+                    'email' => $validated['member_snapshot']['email'] ?? null,
+                    'phone' => $validated['member_snapshot']['phone'] ?? null,
+                    'serialNo' => null,
+                ], fn ($value) => $value !== null);
+
+                return Order::create([
+                    'member_id' => $linkMember ? $member->id : null,
+                    'member_snapshot' => $snapshot,
+                    'items' => $items,
+                    'subtotal' => $subtotal,
+                    'discount' => 0,
+                    'total' => $subtotal + (float) ($validated['tax'] ?? 0),
+                    'total_bv' => $totalBv,
+                    'status' => 'PENDING',
+                    'payment_method' => 'razorpay',
+                    'payment_status' => 'PAID',
+                    'shipping_address' => $validated['shipping_address'],
+                    'razorpay_order_id' => $validated['razorpay_order_id'],
+                    'razorpay_payment_id' => $validated['razorpay_payment_id'],
+                    'razorpay_signature' => $validated['razorpay_signature'] ?? null,
+                    'history' => [
+                        [
+                            'status' => 'PENDING',
+                            'payment_status' => 'PENDING',
+                            'changedBy' => 'system',
+                            'changedAt' => now()->toIso8601String(),
+                            'note' => 'Order created, awaiting payment confirmation',
+                        ],
+                        [
+                            'status' => 'PENDING',
+                            'payment_status' => 'PAID',
+                            'changedBy' => 'razorpay',
+                            'changedAt' => now()->toIso8601String(),
+                            'note' => "Payment received ({$validated['razorpay_payment_id']})",
+                        ],
+                    ],
+                ]);
+            });
+
+            if ($order->total_bv > 0) {
+                try {
+                    $this->bvService->awardForOrder($order);
+                } catch (\Throwable $e) {
+                    Log::error('Payment confirm: BV award failed', [
+                        'order_id' => $order->id,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
+
+            try {
+                $this->shiprocketService->createOrder($order);
+            } catch (\Throwable $e) {
+                Log::error('Payment confirm: Shiprocket sync failed', [
+                    'order_id' => $order->id,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+
+            $refreshed = $order->refresh();
+            $whatsAppLink = null;
+            try {
+                $this->whatsAppService->sendOrderNotification($refreshed);
+                $whatsAppLink = $this->whatsAppService->getOrderWhatsAppLink($refreshed);
+            } catch (\Throwable $e) {
+                Log::error('Payment confirm: WhatsApp notify failed', [
+                    'order_id' => $order->id,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Order confirmed',
+                'order' => new OrderResource($refreshed),
+                'whatsapp_link' => $whatsAppLink,
+            ], 201);
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation failed',
+                'errors' => $e->errors(),
+            ], 422);
+        } catch (\Throwable $e) {
+            Log::error('Payment confirmation error', [
+                'message' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * Verify a payment against Razorpay.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function verifyRazorpayPayment(
+        string $orderId,
+        string $paymentId,
+        ?string $signature,
+        array $config,
+        float $expectedTotal
+    ): ?array {
+        if ($signature !== null && $signature !== '') {
+            $generated = hash_hmac('sha256', $orderId . '|' . $paymentId, $config['key_secret']);
+            if (!hash_equals($generated, $signature)) {
+                Log::warning('Razorpay signature mismatch', compact('orderId', 'paymentId'));
+                return null;
+            }
+        }
+
+        $response = Http::withBasicAuth($config['key_id'], $config['key_secret'])
+            ->get("https://api.razorpay.com/v1/payments/{$paymentId}");
+
+        if (!$response->successful()) {
+            Log::warning('Razorpay payment fetch failed', [
+                'payment_id' => $paymentId,
+                'status' => $response->status(),
+            ]);
+            return null;
+        }
+
+        $payment = $response->json();
+
+        if (($payment['order_id'] ?? null) !== $orderId) {
+            Log::warning('Razorpay payment/order mismatch', compact('orderId', 'paymentId'));
+            return null;
+        }
+
+        if (!in_array($payment['status'] ?? null, ['captured', 'authorized'], true)) {
+            Log::warning('Razorpay payment not captured', [
+                'payment_id' => $paymentId,
+                'status' => $payment['status'] ?? null,
+            ]);
+            return null;
+        }
+
+        $paidAmount = (int) ($payment['amount'] ?? 0);
+        $expectedPaise = (int) round($expectedTotal * 100);
+        if ($paidAmount !== $expectedPaise) {
+            Log::warning('Razorpay amount mismatch', [
+                'payment_id' => $paymentId,
+                'paid' => $paidAmount,
+                'expected' => $expectedPaise,
+            ]);
+            return null;
+        }
+
+        return $payment;
     }
 
     /**

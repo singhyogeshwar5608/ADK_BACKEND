@@ -11,6 +11,7 @@ use App\Models\Member;
 use App\Services\MemberPlacementService;
 use App\Services\MemberStatsService;
 use App\Support\IdGenerator;
+use App\Support\Tree;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -213,6 +214,58 @@ class MemberController extends Controller
         }
 
         $oldStatus = $member->status;
+        $oldSponsorId = $member->sponsor_id;
+        $oldPlacementPath = $member->placement_path;
+
+        // Sponsor re-assignment: resolve the new placement BEFORE persisting so
+        // validation errors abort early. The actual attributes are applied after fill().
+        $sponsorChanged = false;
+        $placement = null;
+        $currentSponsorMemberId = $member->sponsor_id
+            ? (string) ($member->sponsor?->member_id ?? '')
+            : '';
+
+        if (isset($data['sponsor_id']) && trim((string) $data['sponsor_id']) !== ''
+            && trim((string) $data['sponsor_id']) !== $currentSponsorMemberId) {
+            $sponsorChanged = true;
+            $newSponsorIdentifier = trim((string) $data['sponsor_id']);
+
+            // Cycle guards: cannot be own sponsor and cannot be placed under own downline.
+            $newSponsorMember = Member::query()
+                ->where('member_id', $newSponsorIdentifier)
+                ->orWhere('id', is_numeric($newSponsorIdentifier) ? (int) $newSponsorIdentifier : 0)
+                ->first();
+
+            if (!$newSponsorMember) {
+                throw ValidationException::withMessages([
+                    'sponsor_id' => 'Sponsor not found.',
+                ]);
+            }
+
+            if ((int) $newSponsorMember->id === (int) $member->id) {
+                throw ValidationException::withMessages([
+                    'sponsor_id' => 'A member cannot be their own sponsor.',
+                ]);
+            }
+
+            if ($member->placement_path && $newSponsorMember->placement_path
+                && str_starts_with($newSponsorMember->placement_path, $member->placement_path . '.')) {
+                throw ValidationException::withMessages([
+                    'sponsor_id' => 'A member cannot be moved under their own downline.',
+                ]);
+            }
+
+            $preferredLeg = strtoupper((string) ($data['leg'] ?? $member->leg ?? 'LEFT'));
+
+            try {
+                $placement = MemberPlacementService::resolve($newSponsorIdentifier, $preferredLeg, $member->id);
+            } catch (ValidationException $e) {
+                throw ValidationException::withMessages([
+                    'sponsor_id' => 'Unable to place this member under the selected sponsor: '
+                        . implode(' ', array_merge(...array_values($e->errors()))),
+                ]);
+            }
+        }
 
         $member->fill([
             'full_name' => $data['full_name'] ?? $member->full_name,
@@ -237,6 +290,8 @@ class MemberController extends Controller
                 ? $data['aadhar_number'] : $member->aadhar_number,
             'aadhar_image' => array_key_exists('aadhar_image', $data)
                 ? $data['aadhar_image'] : $member->aadhar_image,
+            'aadhar_back_image' => array_key_exists('aadhar_back_image', $data)
+                ? $data['aadhar_back_image'] : $member->aadhar_back_image,
             // Nominee fields
             'nominee_name' => array_key_exists('nominee_name', $data)
                 ? $data['nominee_name'] : $member->nominee_name,
@@ -244,12 +299,59 @@ class MemberController extends Controller
                 ? $data['nominee_aadhar_number'] : $member->nominee_aadhar_number,
             'nominee_aadhar_image' => array_key_exists('nominee_aadhar_image', $data)
                 ? $data['nominee_aadhar_image'] : $member->nominee_aadhar_image,
-        ])->save();
+            'nominee_aadhar_back_image' => array_key_exists('nominee_aadhar_back_image', $data)
+                ? $data['nominee_aadhar_back_image'] : $member->nominee_aadhar_back_image,
+        ]);
+
+        // Apply resolved placement last so it wins over the raw leg field from the form.
+        if ($sponsorChanged && $placement !== null) {
+            $member->sponsor_id = $placement['referrer']?->id ?? $placement['sponsor']?->id;
+            $member->referred_by = $placement['referrer']?->member_id;
+            $member->leg = $placement['leg'];
+            $member->placement_path = $placement['path'];
+            $member->depth = $placement['depth'];
+        }
+
+        $member->save();
+
+        // Update password only when a new (non-empty) one is provided
+        if (!empty($data['password'])) {
+            $member->password_hash = Hash::make($data['password']);
+            $member->save();
+        }
 
         // Update QR code image separately (not in fillable)
         if (array_key_exists('qr_code_image', $data)) {
             $member->qr_code_image = $data['qr_code_image'];
             $member->save();
+        }
+
+        // A sponsor change moves the whole subtree: rewrite every descendant's
+        // placement path, reconcile team-size counters, and refresh both the old
+        // and the new sponsor's referral counts so income/tree data follow along.
+        if ($sponsorChanged) {
+            if ($oldPlacementPath) {
+                $oldPrefix = $oldPlacementPath . '.';
+                Member::query()
+                    ->where('placement_path', 'like', $oldPrefix . '%')
+                    ->orderBy('depth')
+                    ->get()
+                    ->each(function (Member $descendant) use ($oldPrefix, $member) {
+                        $descendant->placement_path = $member->placement_path
+                            . substr($descendant->placement_path, strlen($oldPrefix));
+                        $descendant->depth = Tree::depthFromPath($descendant->placement_path);
+                        $descendant->save();
+                    });
+            }
+
+            $this->reconcileTeamSize($oldPlacementPath, $member->placement_path);
+
+            if ($oldSponsorId && (int) $oldSponsorId !== (int) $member->sponsor_id) {
+                $this->recomputeSponsorReferralCounts($oldSponsorId);
+            }
+            if ($member->sponsor_id) {
+                $this->recomputeSponsorReferralCounts($member->sponsor_id);
+            }
         }
 
         // If member was just activated and already has a first purchase,
@@ -313,7 +415,7 @@ class MemberController extends Controller
     public function tree(Request $request, string $memberId): JsonResponse
     {
         $validated = $request->validate([
-            'depth' => ['sometimes', 'integer', 'min:1', 'max:200'],
+            'depth' => ['sometimes', 'integer', 'min:1', 'max:500'],
         ]);
 
         $root = $this->findMember($memberId);
@@ -332,13 +434,11 @@ class MemberController extends Controller
             ->value('role'))) === 'ADMIN';
 
         $requestedDepth = (int) ($validated['depth'] ?? 3);
-        $depthLimit = $isAdmin
-            ? max(1, min($requestedDepth, 200))
-            : max(1, min($requestedDepth, 10));
+        $depthLimit = max(1, min($requestedDepth, 500));
 
         $maxDepth = $root->depth + $depthLimit;
 
-        $nodeLimit = $isAdmin ? 100_000 : 1_500;
+        $nodeLimit = 200_000;
 
         $nodes = Member::query()
             ->where('placement_path', 'like', $root->placement_path . '%')
@@ -389,10 +489,14 @@ class MemberController extends Controller
             'user_name' => $user->full_name,
         ]);
 
-        // Get all members in the user's binary tree (downline by placement_path)
+        // Get only DIRECT members (referred by this member OR directly placed under them)
         $teamMembers = Member::query()
-            ->where('placement_path', 'like', $user->placement_path . '.%')
-            ->orderBy('created_at', 'desc')
+            ->where(function (Builder $q) use ($user) {
+                $q->where('referred_by', $user->member_id)
+                  ->orWhere('sponsor_id', $user->id);
+            })
+            ->where('id', '!=', $user->id)
+            ->orderBy('serial_no', 'asc')
             ->limit($limit)
             ->get();
 
@@ -469,5 +573,79 @@ class MemberController extends Controller
         }
 
         return null;
+    }
+
+    /**
+     * Move the stored team-size contribution from the old ancestor paths to the new ones.
+     * Common ancestors cancel out (decrement then increment nets to zero).
+     */
+    private function reconcileTeamSize(?string $oldPath, string $newPath): void
+    {
+        $oldAncestors = $oldPath ? $this->ancestorPaths($oldPath) : [];
+        $newAncestors = $this->ancestorPaths($newPath);
+
+        if (!empty($oldAncestors)) {
+            Member::query()->whereIn('placement_path', $oldAncestors)->decrement('stats_team_size');
+        }
+        if (!empty($newAncestors)) {
+            Member::query()->whereIn('placement_path', $newAncestors)->increment('stats_team_size');
+        }
+    }
+
+    /** Every ancestor placement path of a member path (excluding the member itself). */
+    private function ancestorPaths(string $path): array
+    {
+        $segments = explode('.', $path);
+        $paths = [];
+
+        while (count($segments) > 1) {
+            array_pop($segments);
+            $paths[] = implode('.', $segments);
+        }
+
+        return $paths;
+    }
+
+    /**
+     * Rebuild a sponsor's direct-referral counters straight from the database
+     * (used when a member is moved to a different sponsor so income/tree
+     * numbers follow the new relationship).
+     */
+    private function recomputeSponsorReferralCounts(?int $sponsorId): void
+    {
+        if (!$sponsorId) {
+            return;
+        }
+
+        $sponsor = Member::find($sponsorId);
+        if (!$sponsor) {
+            return;
+        }
+
+        $activeDirectReferrals = Member::where(function ($q) use ($sponsor) {
+                $q->where('referred_by', $sponsor->member_id)
+                  ->orWhere('sponsor_id', $sponsor->id);
+            })
+            ->where('status', 'ACTIVE')
+            ->whereNotNull('first_purchase_at')
+            ->count();
+
+        $familyTourCount = Member::where(function ($q) use ($sponsor) {
+                $q->where('referred_by', $sponsor->member_id)
+                  ->orWhere('sponsor_id', $sponsor->id);
+            })
+            ->where('status', 'ACTIVE')
+            ->whereExists(function ($q) {
+                $q->selectRaw(1)
+                  ->from('orders')
+                  ->whereColumn('orders.member_id', 'members.id')
+                  ->where('orders.total_bv', '>=', 5000);
+            })
+            ->count();
+
+        $sponsor->direct_referrals_count = $activeDirectReferrals;
+        $sponsor->stats_direct_refs = $familyTourCount;
+        $sponsor->reward_eligible = $activeDirectReferrals >= 30;
+        $sponsor->save();
     }
 }

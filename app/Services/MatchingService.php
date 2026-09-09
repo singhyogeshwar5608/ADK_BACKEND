@@ -119,49 +119,6 @@ class MatchingService
                 $locked->first_match_done = true;
             }
 
-            // --- 5% Tier Deduction: deduct from member, credit to their direct sponsor ---
-            $tierAmount = 0.0;
-            $tierSponsor = null;
-
-            $originalCappedAmount = $cappedAmount;
-
-            if ($cappedAmount > 0) {
-                $tierAmount = round($cappedAmount * 0.05, 2);
-                if ($tierAmount > 0) {
-                    if ($locked->referred_by) {
-                        $tierSponsor = Member::where('member_id', $locked->referred_by)->lockForUpdate()->first();
-                    }
-                    if (!$tierSponsor && $locked->sponsor_id) {
-                        $tierSponsor = Member::lockForUpdate()->find($locked->sponsor_id);
-                    }
-                    if ($tierSponsor) {
-                        $cappedAmount = round($cappedAmount - $tierAmount, 2);
-                    } else {
-                        $tierAmount = 0.0;
-                    }
-                }
-            }
-            // ---------------------------------------------------------------------------
-
-            // --- 10% Admin TDS Deduction: deduct from matching income, credit to admin ---
-            $adminTdsAmount = 0.0;
-            $admin = null;
-
-            if ($cappedAmount > 0) {
-                $originalForTds = $cappedAmount + $tierAmount;
-                $adminTdsAmount = round($originalForTds * 0.10, 2);
-                if ($adminTdsAmount > 0) {
-                    $admin = Member::where('role', 'ADMIN')->lockForUpdate()->first();
-                    if ($admin && $admin->id !== $locked->id) {
-                        $cappedAmount = round($cappedAmount - $adminTdsAmount, 2);
-                    } else {
-                        $adminTdsAmount = 0.0;
-                        $admin = null;
-                    }
-                }
-            }
-            // ---------------------------------------------------------------------------
-
             $locked->wallet_balance += $cappedAmount;
             $locked->wallet_total_earned += $cappedAmount;
             $locked->weekly_income += $cappedAmount;
@@ -178,12 +135,6 @@ class MatchingService
                 'match_ratio' => $result['match_ratio'],
             ]);
 
-            $tierMeta = $tierAmount > 0 ? ['tier_deducted' => $tierAmount, 'tier_sponsor_id' => $tierSponsor?->id] : [];
-            if ($adminTdsAmount > 0 && $admin) {
-                $tierMeta['admin_tds_deducted'] = $adminTdsAmount;
-                $tierMeta['admin_tds_admin_id'] = $admin->id;
-            }
-
             $type = $isRepurchase ? 'REPURCHASE_MATCHING' : 'MATCHING';
             IncomeTransaction::create([
                 'member_id' => $locked->id,
@@ -194,7 +145,7 @@ class MatchingService
                 'source_id' => $locked->id,
                 'from_member_id' => null,
                 'description' => "Binary matching income ({$result['match_ratio']} ratio, " . ($this->matchingIncomePercent * 100) . "%)",
-                'meta' => array_merge([
+                'meta' => [
                     'left_bv_matched' => $leftDeduction,
                     'right_bv_matched' => $rightDeduction,
                     'match_ratio' => $result['match_ratio'],
@@ -202,7 +153,7 @@ class MatchingService
                     'percentage' => $this->matchingIncomePercent * 100,
                     'original_amount' => $incomeAmount,
                     'capped' => $result['capped'],
-                ], $tierMeta),
+                ],
                 'is_capped' => $result['capped'],
             ]);
 
@@ -213,31 +164,12 @@ class MatchingService
                 'balance_after' => $locked->wallet_balance,
                 'reference' => 'MAT-' . now()->timestamp . '-' . $locked->id,
                 'context' => $type . '_INCOME',
-                'meta' => array_merge([
+                'meta' => [
                     'left_bv_matched' => $leftDeduction,
                     'right_bv_matched' => $rightDeduction,
                     'match_ratio' => $result['match_ratio'],
-                ], $tierMeta),
+                ],
             ]);
-
-            // --- Credit 5% tier income to the sponsor (recursive — own 5% deducted too) ---
-            if ($tierSponsor && $tierAmount > 0) {
-                $originalAmount = $cappedAmount + $tierAmount + ($adminTdsAmount > 0 ? $adminTdsAmount : 0);
-                $this->creditMatchingTierIncome($tierSponsor, $tierAmount, $originalAmount, $type, $locked->id);
-            }
-            // ---------------------------------------------
-
-            // --- Credit 10% admin TDS income to admin ---
-            if ($adminTdsAmount > 0 && $admin) {
-                $this->creditMatchingAdminTds(
-                    $admin,
-                    $adminTdsAmount,
-                    $type,
-                    $locked->id,
-                    $originalCappedAmount,
-                );
-            }
-            // ---------------------------------------------
 
             $result['income_earned'] = $cappedAmount;
             $result['left_bv_matched'] = $leftDeduction;
@@ -279,163 +211,6 @@ class MatchingService
             $member->weekly_income_reset_date = \Carbon\Carbon::now()->toDateString();
             $member->save();
         }
-    }
-
-    /**
-     * Recursively credit 5% tier income up the sponsorship chain.
-     * Each level takes 5% of what the previous level received.
-     * Also deducts 10% admin TDS at each level.
-     */
-    private function creditMatchingTierIncome(
-        Member $sponsor,
-        float $tierAmount,
-        float $memberOriginalAmount,
-        string $sourceIncomeType,
-        int $fromMemberId,
-        int $depth = 0
-    ): void {
-        if ($depth > 10 || $tierAmount <= 0) {
-            return;
-        }
-
-        $this->resetWeeklyIncomeIfNeeded($sponsor);
-        $remainingCap = $this->weeklyCap - (float) $sponsor->weekly_income;
-        $cappedTier = $remainingCap > 0 ? min($tierAmount, $remainingCap) : 0.0;
-        if ($cappedTier <= 0) {
-            return;
-        }
-
-        // --- 10% Admin TDS Deduction ---
-        $originalCappedTier = $cappedTier;
-        $adminTdsAmount = round($originalCappedTier * 0.10, 2);
-        $admin = Member::where('role', 'ADMIN')->lockForUpdate()->first();
-        if ($admin && $admin->id !== $sponsor->id && $adminTdsAmount > 0) {
-            $cappedTier = round($cappedTier - $adminTdsAmount, 2);
-            $this->creditMatchingAdminTds(
-                $admin,
-                $adminTdsAmount,
-                'TIER_INCOME',
-                $sponsor->id,
-                $originalCappedTier,
-            );
-        } else {
-            $adminTdsAmount = 0.0;
-        }
-        // ---------------------------------
-
-        // Credit this level
-        $sponsor->wallet_balance += $cappedTier;
-        $sponsor->wallet_total_earned += $cappedTier;
-        $sponsor->weekly_income += $cappedTier;
-        $sponsor->save();
-
-        IncomeTransaction::create([
-            'member_id' => $sponsor->id,
-            'type' => 'TIER_INCOME',
-            'amount' => $cappedTier,
-            'bv' => 0,
-            'source_type' => 'BINARY_MATCHING',
-            'source_id' => $fromMemberId,
-            'from_member_id' => $fromMemberId,
-            'description' => "5% tier income from " . ($depth === 0 ? "downline's" : "sponsor chain's") . " {$sourceIncomeType} income",
-            'meta' => [
-                'source_member_id' => $fromMemberId,
-                'source_income_type' => $sourceIncomeType,
-                'source_income_amount' => $memberOriginalAmount,
-                'tier_percentage' => 5,
-                'original_amount' => $tierAmount,
-                'capped' => $originalCappedTier < $tierAmount,
-                'tier_depth' => $depth,
-                'admin_tds_deducted' => $adminTdsAmount > 0 ? $adminTdsAmount : null,
-            ],
-            'is_capped' => $originalCappedTier < $tierAmount,
-        ]);
-
-        WalletTransaction::create([
-            'member_id' => $sponsor->id,
-            'type' => 'CREDIT',
-            'amount' => $cappedTier,
-            'balance_after' => $sponsor->wallet_balance,
-            'reference' => 'TIR-' . now()->timestamp . '-' . $sponsor->id,
-            'context' => 'TIER_INCOME',
-            'meta' => [
-                'from_member_id' => $fromMemberId,
-                'source_income_type' => $sourceIncomeType,
-                'tier_depth' => $depth,
-                'admin_tds_deducted' => $adminTdsAmount > 0 ? $adminTdsAmount : null,
-            ],
-        ]);
-
-        // Recurse: 5% of this tier amount (after admin TDS) goes to THIS sponsor's sponsor
-        $nextTierAmount = round($cappedTier * 0.05, 2);
-        if ($nextTierAmount > 0) {
-            $nextSponsor = null;
-            if ($sponsor->referred_by) {
-                $nextSponsor = Member::where('member_id', $sponsor->referred_by)->lockForUpdate()->first();
-            }
-            if (!$nextSponsor && $sponsor->sponsor_id) {
-                $nextSponsor = Member::lockForUpdate()->find($sponsor->sponsor_id);
-            }
-            if ($nextSponsor) {
-                $this->creditMatchingTierIncome(
-                    $nextSponsor,
-                    $nextTierAmount,
-                    $cappedTier,
-                    $sourceIncomeType,
-                    $sponsor->id,
-                    $depth + 1
-                );
-            }
-        }
-    }
-
-    /**
-     * Credit admin with 10% TDS on matching income (or matching tier income).
-     * No further deductions applied.
-     */
-    private function creditMatchingAdminTds(
-        Member $admin,
-        float $tdsAmount,
-        string $sourceIncomeType,
-        int $fromMemberId,
-        float $originalIncomeAmount,
-    ): void {
-        $admin->wallet_balance += $tdsAmount;
-        $admin->wallet_total_earned += $tdsAmount;
-        $admin->tds_income += $tdsAmount;
-        $admin->save();
-
-        IncomeTransaction::create([
-            'member_id' => $admin->id,
-            'type' => 'TDS_INCOME',
-            'amount' => $tdsAmount,
-            'bv' => 0,
-            'source_type' => 'BINARY_MATCHING',
-            'source_id' => $fromMemberId,
-            'from_member_id' => $fromMemberId,
-            'description' => "10% admin TDS income on {$sourceIncomeType} from member #{$fromMemberId}",
-            'meta' => [
-                'source_income_type' => $sourceIncomeType,
-                'source_income_amount' => $originalIncomeAmount,
-                'source_member_id' => $fromMemberId,
-                'tds_percentage' => 10,
-            ],
-            'is_capped' => false,
-        ]);
-
-        WalletTransaction::create([
-            'member_id' => $admin->id,
-            'type' => 'CREDIT',
-            'amount' => $tdsAmount,
-            'balance_after' => $admin->wallet_balance,
-            'reference' => 'TDS-' . now()->timestamp . '-' . $admin->id,
-            'context' => 'TDS_INCOME',
-            'meta' => [
-                'from_member_id' => $fromMemberId,
-                'source_income_type' => $sourceIncomeType,
-                'source_income_amount' => $originalIncomeAmount,
-            ],
-        ]);
     }
 
     /**

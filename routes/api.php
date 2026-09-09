@@ -20,6 +20,7 @@ use App\Http\Controllers\Api\v1\ShiprocketWebhookController;
 use App\Http\Controllers\Api\ProductController;
 use App\Http\Controllers\Api\CategoryController;
 use App\Http\Controllers\Api\v1\DeliveryCenterController;
+use App\Http\Controllers\Api\v1\IncomeHistoryController;
 use App\Http\Controllers\Api\v1\ReferralController;
 use App\Http\Controllers\Api\v1\PincodeController;
 use App\Http\Controllers\Api\KycController;
@@ -50,6 +51,7 @@ Route::prefix('v1')->name('api.v1.')->group(function () {
     Route::get('payment/razorpay-key', [PaymentController::class, 'getKeyId'])->name('payment.razorpay-key');
     Route::post('payment/create-order', [PaymentController::class, 'createOrder'])->name('payment.create-order');
     Route::post('payment/verify', [PaymentController::class, 'verifyPayment'])->name('payment.verify');
+    Route::post('payment/confirm', [PaymentController::class, 'confirmPayment'])->name('payment.confirm');
 
     // Public delivery centers route (accessible to everyone)
     Route::apiResource('delivery-centers', DeliveryCenterController::class);
@@ -181,6 +183,18 @@ Route::prefix('v1')->name('api.v1.')->group(function () {
         Route::prefix('kyc')->name('kyc.')->group(function () {
             Route::get('status', [KycController::class, 'status'])->name('status');
             Route::post('update', [KycController::class, 'update'])->name('update');
+        });
+
+        // Income History Routes
+        Route::prefix('income')->name('income.')->group(function () {
+            Route::get('history', [IncomeHistoryController::class, 'myHistory'])->name('history.my');
+        });
+
+        Route::prefix('admin')->name('admin.')->group(function () {
+            Route::get('income/history/{member}', [IncomeHistoryController::class, 'memberHistory'])->name('income.history.member');
+            Route::get('income/history-search', [IncomeHistoryController::class, 'searchMembers'])->name('income.history.search');
+            Route::get('income/current/{member}', [IncomeHistoryController::class, 'currentIncome'])->name('income.history.current');
+            Route::post('income/pay-month', [IncomeHistoryController::class, 'payMonth'])->name('income.history.payMonth');
         });
     });
 });

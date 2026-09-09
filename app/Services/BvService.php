@@ -83,6 +83,7 @@ class BvService
 
             // Update purchaser's own total BV
             $purchaser->bv_total += $amount;
+            $purchaser->self_purchase_bv += $amount;
             $purchaser->save();
 
             $paths = $this->pathsIncludingAncestors($purchaser->placement_path);

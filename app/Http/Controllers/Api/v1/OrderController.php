@@ -222,6 +222,7 @@ class OrderController extends Controller
                         'fullName' => $user->full_name,
                         'email' => $user->email,
                         'phone' => $user->phone,
+                        'serialNo' => $user->serial_no,
                     ],
                     'items' => $items,
                     'subtotal' => $validated['total_amount'],

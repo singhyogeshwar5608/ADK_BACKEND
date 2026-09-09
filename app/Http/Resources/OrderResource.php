@@ -26,6 +26,7 @@ class OrderResource extends JsonResource
                 'fullName' => data_get($this->member_snapshot, 'fullName'),
                 'email' => data_get($this->member_snapshot, 'email'),
                 'phone' => data_get($this->member_snapshot, 'phone'),
+                'serialNo' => data_get($this->member_snapshot, 'serialNo'),
             ],
             'subtotal' => (float) $this->subtotal,
             'discount' => (float) $this->discount,

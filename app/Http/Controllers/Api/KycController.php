@@ -58,6 +58,12 @@ class KycController extends Controller
                 'message' => 'Aadhar image cannot be changed. Please contact admin for changes.',
             ], 403);
         }
+        if ($request->has('aadharBackImage') && $this->isAadharKycComplete($member)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Aadhar back image cannot be changed. Please contact admin for changes.',
+            ], 403);
+        }
         if ($request->has('panNumber') && $this->isPanKycComplete($member)) {
             return response()->json([
                 'success' => false,
@@ -72,7 +78,7 @@ class KycController extends Controller
         }
 
         // Check if nominee is already complete - member cannot change it
-        $hasNomineeChanges = $request->has('nomineeName') || $request->has('nomineeAadharNumber') || $request->has('nomineeAadharImage');
+        $hasNomineeChanges = $request->has('nomineeName') || $request->has('nomineeAadharNumber') || $request->has('nomineeAadharImage') || $request->has('nomineeAadharBackImage');
         if ($hasNomineeChanges && $this->isNomineeComplete($member)) {
             return response()->json([
                 'success' => false,
@@ -111,8 +117,10 @@ class KycController extends Controller
             // Handle image URLs from Cloudinary
             $this->handleImageUrl($request, $member, 'bankAccountImage', 'bank_account_image');
             $this->handleImageUrl($request, $member, 'aadharImage', 'aadhar_image');
+            $this->handleImageUrl($request, $member, 'aadharBackImage', 'aadhar_back_image');
             $this->handleImageUrl($request, $member, 'panImage', 'pan_image');
             $this->handleImageUrl($request, $member, 'nomineeAadharImage', 'nominee_aadhar_image');
+            $this->handleImageUrl($request, $member, 'nomineeAadharBackImage', 'nominee_aadhar_back_image');
 
             // Update KYC status if all documents are uploaded
             if ($this->isKycComplete($member)) {
@@ -135,6 +143,7 @@ class KycController extends Controller
                         'aadharCard' => [
                             'number' => $member->aadhar_number,
                             'image' => $member->aadhar_image,
+                            'backImage' => $member->aadhar_back_image,
                         ],
                         'panCard' => [
                             'number' => $member->pan_number,
@@ -144,6 +153,7 @@ class KycController extends Controller
                             'name' => $member->nominee_name,
                             'aadharNumber' => $member->nominee_aadhar_number,
                             'aadharImage' => $member->nominee_aadhar_image,
+                            'aadharBackImage' => $member->nominee_aadhar_back_image,
                         ],
                         'status' => $member->kyc_status,
                     ]
@@ -254,6 +264,7 @@ class KycController extends Controller
             'nomineeName' => 'nullable|string|max:255',
             'nomineeAadharNumber' => 'nullable|string|max:20',
             'nomineeAadharImage' => 'nullable|string|max:2048',
+            'nomineeAadharBackImage' => 'nullable|string|max:2048',
         ]);
 
         if ($validator->fails()) {
@@ -273,6 +284,9 @@ class KycController extends Controller
             }
             if ($request->has('nomineeAadharImage')) {
                 $member->nominee_aadhar_image = $request->nomineeAadharImage;
+            }
+            if ($request->has('nomineeAadharBackImage')) {
+                $member->nominee_aadhar_back_image = $request->nomineeAadharBackImage;
             }
 
             $member->save();
@@ -311,6 +325,7 @@ class KycController extends Controller
                     'aadharCard' => [
                         'number' => $member->aadhar_number,
                         'image' => $this->publicKycImageUrl($member->aadhar_image),
+                        'backImage' => $this->publicKycImageUrl($member->aadhar_back_image),
                     ],
                     'panCard' => [
                         'number' => $member->pan_number,
@@ -320,6 +335,7 @@ class KycController extends Controller
                         'name' => $member->nominee_name,
                         'aadharNumber' => $member->nominee_aadhar_number,
                         'aadharImage' => $this->publicKycImageUrl($member->nominee_aadhar_image),
+                        'aadharBackImage' => $this->publicKycImageUrl($member->nominee_aadhar_back_image),
                     ],
                     'status' => $member->kyc_status,
                     'rejectionReason' => $member->kyc_rejection_reason,

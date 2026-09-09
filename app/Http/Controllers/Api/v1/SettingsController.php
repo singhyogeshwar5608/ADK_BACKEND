@@ -35,6 +35,7 @@ class SettingsController extends Controller
                     'repurchase_amount',
                     'repurchase_bv',
                     'weekly_capping',
+                    'income_cycle_start_day',
                 ])
                 ->get()
                 ->keyBy('key');
@@ -91,6 +92,7 @@ class SettingsController extends Controller
                 'repurchase_amount',
                 'repurchase_bv',
                 'weekly_capping',
+                'income_cycle_start_day',
             ])],
             'settings.*.value' => ['required'],
         ]);
@@ -138,6 +140,7 @@ class SettingsController extends Controller
             'razorpay_key_id' => $this->validateRazorpayKeyId($value),
             'razorpay_key_secret' => $this->validateRazorpayKeySecret($value),
             'joining_amount', 'business_volume', 'repurchase_amount', 'repurchase_bv', 'weekly_capping' => $this->validatePositiveNumber($value),
+            'income_cycle_start_day' => $this->validateCycleStartDay($value),
             'self_income_percent', 'direct_income_percent', 'matching_income_percent', 'self_repurchase_income_percent', 'repurchase_matching_income_percent', 'award_income_percent' => $this->validatePercentage($value),
             default => throw ValidationException::withMessages([
                 'key' => "Unknown setting key: {$key}"
@@ -226,10 +229,21 @@ class SettingsController extends Controller
     private function validatePercentage(mixed $value): void
     {
         $percent = is_array($value) ? $value['value'] : $value;
-        
+
         if (!is_numeric($percent) || $percent < 0 || $percent > 100) {
             throw ValidationException::withMessages([
                 'value' => 'Percentage must be between 0 and 100'
+            ]);
+        }
+    }
+
+    private function validateCycleStartDay(mixed $value): void
+    {
+        $day = is_array($value) ? $value['value'] : $value;
+
+        if (!is_numeric($day) || (int) $day < 1 || (int) $day > 28) {
+            throw ValidationException::withMessages([
+                'value' => 'Income cycle start day must be an integer between 1 and 28'
             ]);
         }
     }

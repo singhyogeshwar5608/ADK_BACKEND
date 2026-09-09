@@ -7,6 +7,7 @@ use App\Models\Member;
 use App\Models\Order;
 use App\Models\Product;
 use App\Services\MLMIncomeService;
+use App\Services\MlmSettingsService;
 use App\Services\WhatsAppService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -17,7 +18,8 @@ class PurchaseController extends Controller
 {
     public function __construct(
         private readonly MLMIncomeService $mlmIncomeService,
-        private readonly WhatsAppService $whatsAppService
+        private readonly WhatsAppService $whatsAppService,
+        private readonly MlmSettingsService $settingsService
     ) {}
 
     /**
@@ -54,6 +56,13 @@ class PurchaseController extends Controller
                 // Create order
                 $order = Order::create([
                     'member_id' => $member->id,
+                    'member_snapshot' => [
+                        'memberId' => $member->member_id,
+                        'fullName' => $member->full_name,
+                        'email' => $member->email,
+                        'phone' => $member->phone,
+                        'serialNo' => $member->serial_no,
+                    ],
                     'total_amount' => $totalPrice,
                     'total_bv' => $totalBV,
                     'status' => 'PENDING',
@@ -131,13 +140,17 @@ class PurchaseController extends Controller
     {
         $member = Member::where('member_id', $memberId)->firstOrFail();
 
+        // Weekly cap lives in mlm_settings (admin-editable), not hardcoded.
+        $weeklyCap = (int) $this->settingsService->getSetting('weekly_capping', 50000);
+
         $summary = [
             'member_id' => $member->id,
             'member_name' => $member->full_name,
             'wallet_balance' => (float) $member->wallet_balance,
             'wallet_total_earned' => (float) $member->wallet_total_earned,
             'weekly_income' => (float) $member->weekly_income,
-            'weekly_cap_remaining' => 50000 - (float) $member->weekly_income,
+            'weekly_cap_remaining' => max(0, $weeklyCap - (float) $member->weekly_income),
+            'weekly_cap' => $weeklyCap,
             'is_active' => (bool) $member->is_active,
             'is_repurchase_eligible' => (bool) $member->is_repurchase_eligible,
             'reward_eligible' => (bool) $member->reward_eligible,
@@ -280,16 +293,65 @@ class PurchaseController extends Controller
     {
         $member = Member::where('member_id', $memberId)->firstOrFail();
 
+        // Income cycle start comes from the admin-managed `income_cycle_start_day`
+        // setting (see MlmSettingsService::getIncomeCycleStart), replacing the old
+        // temporary subMonth() hack so each month shows only its own income.
+        $cycleStart = $this->settingsService->getIncomeCycleStart();
+
+        $incomeByType = $member->incomeTransactions()
+            ->where('created_at', '>=', $cycleStart)
+            ->selectRaw('type, SUM(amount) as total')
+            ->groupBy('type')
+            ->pluck('total', 'type');
+
+        $sumOf = function (array $types) use ($incomeByType): float {
+            $total = 0.0;
+            foreach ($types as $type) {
+                $total += (float) ($incomeByType[$type] ?? 0);
+            }
+
+            return $total;
+        };
+
+        // Category totals pulled straight from the income_transactions table.
+        // Mirrors the seven income cards shown on the Flutter Profile screen.
+        $selfPurchase = $sumOf(['SELF']);
+        $selfRepurchase = $sumOf(['REPURCHASE_SELF']);
+        $sponsor = $sumOf(['SPONSOR']);
+        $sponsorAwardKit = $sumOf(['SPONSOR_AWARD']);
+        $matching = $sumOf(['MATCHING']);
+        $repurchaseMatching = $sumOf(['REPURCHASE_MATCHING']);
+        $reward = $sumOf(['REWARD', 'REPURCHASE_REWARD']);
+        $downlineMonthlySponsor = (float) $member->downline_monthly_sponsor_income;
+
+        $total = $selfPurchase + $selfRepurchase + $sponsor + $sponsorAwardKit
+            + $matching + $repurchaseMatching + $reward + $downlineMonthlySponsor;
+
+        // Weekly cap lives in mlm_settings (admin-editable), not hardcoded.
+        $weeklyCap = (int) $this->settingsService->getSetting('weekly_capping', 50000);
+
         $stats = [
             'total_income' => [
-                'self' => $member->incomeTransactions()->whereIn('type', ['SELF', 'REPURCHASE_SELF'])->sum('amount'),
-                'sponsor' => $member->incomeTransactions()->where('type', 'SPONSOR')->sum('amount'),
-                'matching' => $member->incomeTransactions()->whereIn('type', ['MATCHING', 'REPURCHASE_MATCHING'])->sum('amount'),
-                'reward' => $member->incomeTransactions()->whereIn('type', ['REWARD', 'REPURCHASE_REWARD'])->sum('amount'),
+                'self' => $selfPurchase + $selfRepurchase,
+                'sponsor' => $sponsor,
+                'matching' => $matching + $repurchaseMatching,
+                'reward' => $reward,
             ],
+            'income_breakdown' => [
+                'self_purchase' => $selfPurchase,
+                'sponsor' => $sponsor,
+                'matching' => $matching,
+                'self_repurchase' => $selfRepurchase,
+                'repurchase_matching' => $repurchaseMatching,
+                'sponsor_award_kit' => $sponsorAwardKit,
+                'downline_monthly_sponsor' => $downlineMonthlySponsor,
+                'reward' => $reward,
+            ],
+            'total' => $total,
             'this_week' => [
                 'total' => (float) $member->weekly_income,
-                'cap_remaining' => 50000 - (float) $member->weekly_income,
+                'cap_remaining' => max(0, $weeklyCap - (float) $member->weekly_income),
+                'cap' => $weeklyCap,
             ],
             'this_month' => [
                 'total' => $member->incomeTransactions()

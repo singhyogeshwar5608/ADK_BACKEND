@@ -13,7 +13,12 @@ class ReportService
     {
         $range = max(1, min($range, 180));
         $today = Carbon::today();
-        $rangeStart = $today->copy()->subDays($range);
+
+        // Current income cycle start from the admin-managed `income_cycle_start_day`
+        // setting (see MlmSettingsService::getIncomeCycleStart). Sales and income
+        // cards show the current cycle's data, so they stay consistent with the
+        // value shown in the app and follow the cycle day if the admin changes it.
+        $cycleStart = app(\App\Services\MlmSettingsService::class)->getIncomeCycleStart();
 
         [$totalMembers, $activeMembers, $totalOrders] = [
             Member::count(),
@@ -25,8 +30,9 @@ class ReportService
             ->whereNotNull('member_id')
             ->count();
 
+        // Sales + BV for the CURRENT CYCLE (matches the income cards).
         $orderStats = Order::query()
-            ->where('created_at', '>=', $rangeStart)
+            ->where('created_at', '>=', $cycleStart)
             ->whereNotIn('status', ['CANCELLED'])
             ->whereNotNull('member_id')
             ->selectRaw('COALESCE(SUM(total), 0) as total_sales')
@@ -34,6 +40,15 @@ class ReportService
             ->selectRaw('COUNT(*) as orders_count')
             ->first();
 
+        // Total BV card = COMPLETE (lifetime) volume across all non-cancelled orders.
+        // Kept as its own query because it deliberately has no date filter.
+        $lifecycleBv = Order::query()
+            ->whereNotIn('status', ['CANCELLED'])
+            ->whereNotNull('member_id')
+            ->sum('total_bv');
+
+        // Trend chart (30-day sales vs BV) is unchanged from before.
+        $rangeStart = $today->copy()->subDays($range);
         $salesSeries = Order::query()
             ->where('created_at', '>=', $rangeStart)
             ->whereNotIn('status', ['CANCELLED'])
@@ -84,7 +99,7 @@ class ReportService
         foreach ($incomeTypes as $key => $types) {
             if (!empty($types)) {
                 $incomeTotals[$key] = (float) IncomeTransaction::whereIn('type', $types)
-                    ->where('created_at', '>=', $rangeStart)
+                    ->where('created_at', '>=', $cycleStart)
                     ->sum('amount');
             } else {
                 $incomeTotals[$key] = 0;
@@ -102,7 +117,7 @@ class ReportService
                 'totalOrders' => $totalOrders,
                 'todaysOrders' => $todaysOrders,
                 'totalSales' => (float) ($orderStats->total_sales ?? 0),
-                'totalBv' => (float) ($orderStats->total_bv ?? 0),
+                'totalBv' => (float) $lifecycleBv,
                 ...$incomeTotals,
             ],
             'topMembers' => $topMembers,

@@ -35,6 +35,8 @@ class Member extends Authenticatable
         'wallet_balance',
         'wallet_total_earned',
         'bv_total',
+        'self_purchase_bv',
+        'sponsor_award_tracked_bv',
         'bv_left_leg',
         'bv_right_leg',
         'bv_carry_forward_left',
@@ -58,8 +60,10 @@ class Member extends Authenticatable
         'bank_account_image',
         'aadhar_number',
         'aadhar_image',
+        'aadhar_back_image',
         'pan_number',
         'pan_image',
+        'qr_code_image',
         'kyc_status',
         'kyc_rejection_reason',
         'kyc_verified_at',
@@ -67,10 +71,11 @@ class Member extends Authenticatable
         'nominee_name',
         'nominee_aadhar_number',
         'nominee_aadhar_image',
+        'nominee_aadhar_back_image',
         'serial_no',
         'type',
         'referred_by',
-        'tds_income',
+        'income_reset_at',
     ];
 
     protected static function booted()
@@ -89,6 +94,8 @@ class Member extends Authenticatable
         'wallet_balance' => 'decimal:2',
         'wallet_total_earned' => 'decimal:2',
         'bv_total' => 'decimal:2',
+        'self_purchase_bv' => 'decimal:2',
+        'sponsor_award_tracked_bv' => 'decimal:2',
         'bv_left_leg' => 'decimal:2',
         'bv_right_leg' => 'decimal:2',
         'bv_carry_forward_left' => 'decimal:2',
@@ -107,7 +114,7 @@ class Member extends Authenticatable
         'first_match_done' => 'boolean',
         'reward_eligible' => 'boolean',
         'level_completion' => 'integer',
-        'tds_income' => 'decimal:2',
+        'income_reset_at' => 'datetime',
         // KYC Document Fields
         'kyc_status' => 'string',
         'kyc_verified_at' => 'datetime',
@@ -142,6 +149,12 @@ class Member extends Authenticatable
         }
         if (isset($array['nominee_aadhar_image'])) {
             $array['nomineeAadharImage'] = $array['nominee_aadhar_image'];
+        }
+        if (isset($array['aadhar_back_image'])) {
+            $array['aadharBackImage'] = $array['aadhar_back_image'];
+        }
+        if (isset($array['nominee_aadhar_back_image'])) {
+            $array['nomineeAadharBackImage'] = $array['nominee_aadhar_back_image'];
         }
         return $array;
     }
@@ -275,18 +288,23 @@ class Member extends Authenticatable
 
     public function getDownlineMonthlySponsorIncomeAttribute(): float
     {
-        // Actual TIER_INCOME credited to this member from their direct downlines this month
+        // Actual MONTHLY_TIER credited to this member from their direct downlines
         $directChildIds = Member::where('sponsor_id', $this->id)->pluck('id');
 
         if ($directChildIds->isEmpty()) {
             return 0.0;
         }
 
-        return (float) IncomeTransaction::where('member_id', $this->id)
-            ->where('type', 'TIER_INCOME')
-            ->whereIn('from_member_id', $directChildIds)
-            ->whereMonth('created_at', now()->month)
-            ->whereYear('created_at', now()->year)
-            ->sum('amount');
+        $query = IncomeTransaction::where('member_id', $this->id)
+            ->where('type', 'MONTHLY_TIER')
+            ->whereIn('from_member_id', $directChildIds);
+
+        // Income cycle start comes from the admin-managed `income_cycle_start_day`
+        // setting (see MlmSettingsService::getIncomeCycleStart), replacing the old
+        // temporary subMonth() hack so each month counts only its own tier income.
+        $cycleStart = app(\App\Services\MlmSettingsService::class)->getIncomeCycleStart();
+        $query->where('created_at', '>=', $cycleStart);
+
+        return (float) $query->sum('amount');
     }
 }
